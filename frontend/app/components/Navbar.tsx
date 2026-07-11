@@ -1,6 +1,6 @@
 const NAV_LINKS = [
   { label: "How it works", href: "#how-it-works" },
-  { label: "Export chats", href: "#export-guide" },
+  { label: "Export guide", href: "#export-guide" },
   { label: "FAQ", href: "#faq" },
 ];
 
