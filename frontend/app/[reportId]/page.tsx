@@ -48,6 +48,7 @@ export default function ReportPage() {
       parsed={state.report.parsed}
       findings={state.report.findings}
       createdAt={state.report.createdAt}
+      mode={state.report.mode}
     />
   );
 }

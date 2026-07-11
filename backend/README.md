@@ -47,7 +47,7 @@ default model (`gemini-3.5-flash`).
 | Method | Path             | Body | Returns |
 |--------|------------------|------|---------|
 | POST   | `/parse`         | multipart: `file` (a `.zip` account export **or** a single `conversations.json`) + `format` (`auto`\|`claude`\|`chatgpt`\|`generic`) + `human_only` (default `true`) | `{format, conversations[], summaries[], account?, memory?}` |
-| POST   | `/analyze`       | `{conversation_id?, messages[]}` | **SSE stream** — `meta`, one `inference` per finding, then `done` (`error` on failure) |
+| POST   | `/analyze`       | `{conversation_id?, mode?, messages[]}` where `mode` is `conservative` or `speculative` | **SSE stream** — `meta`, one `inference` per finding, then `done` (`error` on failure) |
 | POST   | `/redact_rerun`  | `{messages[], redacted_message_ids[], redactions[]?, original_inferences[]?}` | `{inferences[], diff}` |
 | GET    | `/test_gemini`   | optional query: `prompt` | `{ok, model, text}` from a minimal real Gemini call |
 | GET    | `/health`        | — | `{status, model, mock_mode, api_key_configured}` |

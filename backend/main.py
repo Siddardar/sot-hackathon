@@ -211,7 +211,7 @@ def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
     worker thread and the blocking Gemini call doesn't stall the event loop.
     """
     try:
-        result = profiler.run_profiler(request.messages)
+        result = profiler.run_profiler(request.messages, mode=request.mode)
     except profiler.ProfilerError as exc:
         yield _sse("error", {"message": str(exc)})
         yield _sse("done", {"count": 0})
@@ -226,6 +226,7 @@ def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
         {
             "count": len(result.inferences),
             "model": result.model,
+            "mode": result.mode,
             "mock": result.mock,
             "tier_counts": result.tier_counts,
             "tier_errors": result.tier_errors,

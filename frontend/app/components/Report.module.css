@@ -115,6 +115,32 @@
   max-width: 64ch;
   margin-bottom: 30px;
 }
+.mode {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline);
+  background: var(--background);
+  color: var(--muted);
+  font-family: var(--font-inter);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.mode.spec {
+  border-color: #e7c58d;
+  background: #f8ecd7;
+  color: #855415;
+}
+.note {
+  margin: -18px 0 30px;
+  max-width: 64ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
 
 .band {
   display: grid;

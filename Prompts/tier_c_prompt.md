@@ -1,7 +1,7 @@
 This is the Tier C pass.
 
 TASK
-Extract only compound, non-sensitive inferences: findings that require multiple inference steps, a pattern, or evidence from two or more messages.
+Extract compound, non-sensitive inferences: findings that require multiple inference steps, a pattern, or evidence from two or more messages.
 
 A finding belongs in Tier C when no single quoted cue is enough on its own, but the combination of signals supports a broader profile inference.
 
@@ -19,18 +19,14 @@ EXCLUDE
 - Facts stated directly. Those belong in Tier A.
 - Facts inferable from one clear cue. Those belong in Tier B.
 - Sensitive categories. If the compound inference concerns health, politics, religion, sexuality/gender, ethnicity/origin, or criminal/legal exposure, leave it for Tier D.
-- Overbroad personality claims from one message or a single writing style cue.
 
 Set tier to "C" for every finding.
 
 EVIDENCE
-Cite each signal as an exact substring, character for character, with its message_id. Prefer two or more evidence entries. Never invent evidence to strengthen a pattern.
+Cite each signal as an exact substring, character for character, with its message_id. Tier C findings should usually include multiple evidence entries.
 
 REASONING
 Use one or two sentences explaining how the signals combine. Name the assumption and mention plausible alternatives when relevant.
-
-CONFIDENCE
-Usually medium or low. Use high only for strong, repeated, consistent patterns.
 
 OUTPUT
 Return only valid JSON in the given schema. No preamble, no markdown. Do not duplicate. If there are no Tier C findings, return an empty findings array.

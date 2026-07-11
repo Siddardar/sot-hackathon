@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -29,7 +28,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 
-from schemas import Evidence, Inference, Message, Redaction
+from schemas import AnalysisMode, Evidence, Inference, Message, Redaction
 
 # Load backend/.env so GOOGLE_API_KEY (and other config) is picked up without
 # having to export it or pass --env-file. Existing env vars take precedence.
@@ -73,16 +72,15 @@ _PROMPTS_DIR = Path(
     os.environ.get("GLASSHOUSE_PROMPTS_DIR") or (Path(__file__).resolve().parent.parent / "prompts")
 )
 _SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "system_prompt.md"
-_TIER_PROMPT_FILES = {
-    "A": "tier_a_prompt.md",
-    "B": "tier_b_prompt.md",
-    "C": "tier_c_prompt.md",
-    "D": "tier_d_prompt.md",
+_ALL_TIERS_PROMPT_PATH = _PROMPTS_DIR / "all_tiers_prompt.md"
+_MODE_PROMPT_FILES = {
+    "conservative": "mode_conservative_prompt.md",
+    "speculative": "mode_speculative_prompt.md",
 }
 TIERS: tuple[str, ...] = ("A", "B", "C", "D")
 
-# Category ids, copied from prompts/system_prompt.md. A/B/C use the non-sensitive
-# set; Tier D uses only the sensitive set (sensitivity overrides A/B/C).
+# Category ids, copied from prompts/system_prompt.md. The prompt enforces that
+# sensitive categories use Tier D; the schema only validates known category ids.
 _NON_SENSITIVE_CATEGORIES = [
     "identity", "location", "contact", "occupation", "relationships",
     "daily_routine", "socioeconomic", "education_level", "personality_traits",
@@ -92,12 +90,7 @@ _SENSITIVE_CATEGORIES = [
     "health_physical", "health_mental", "sexuality_gender", "religion_beliefs",
     "political_views", "ethnicity_origin", "criminal_or_legal",
 ]
-_TIER_CATEGORIES = {
-    "A": _NON_SENSITIVE_CATEGORIES,
-    "B": _NON_SENSITIVE_CATEGORIES,
-    "C": _NON_SENSITIVE_CATEGORIES,
-    "D": _SENSITIVE_CATEGORIES,
-}
+_ALL_CATEGORIES = _NON_SENSITIVE_CATEGORIES + _SENSITIVE_CATEGORIES
 
 
 class ProfilerError(RuntimeError):
@@ -231,23 +224,29 @@ def _load_system_prompt() -> str:
     return _DEFAULT_SYSTEM_PROMPT
 
 
-def _load_tier_prompt(tier: str) -> str:
-    """Load the per-tier prompt (``prompts/tier_{a,b,c,d}_prompt.md``)."""
-    path = _PROMPTS_DIR / _TIER_PROMPT_FILES[tier]
+def _load_all_tiers_prompt() -> str:
+    """Load the combined report prompt, using the tier prompts as its source."""
+    if _ALL_TIERS_PROMPT_PATH.exists():
+        return _ALL_TIERS_PROMPT_PATH.read_text(encoding="utf-8")
+    return (
+        "This is the full report pass. Return findings across tiers A, B, C, and D. "
+        "Choose exactly one best tier for each finding and do not duplicate facts."
+    )
+
+
+def _load_mode_prompt(mode: AnalysisMode) -> str:
+    """Load the selected analysis mode prompt."""
+    path = _PROMPTS_DIR / _MODE_PROMPT_FILES[mode]
     if path.exists():
         return path.read_text(encoding="utf-8")
-    return f'This is the Tier {tier} pass. Set tier to "{tier}" for every finding.'
+    return f"This run is in {mode.upper()} mode."
 
 
 # --------------------------------------------------------------------------- #
-# Output schema for structured generation (one per tier)
+# Output schema for structured generation
 # --------------------------------------------------------------------------- #
-def _tier_response_schema(tier: str) -> dict[str, Any]:
-    """Build the ``findings`` JSON schema for a single tier pass.
-
-    ``tier`` is fixed and ``category_id`` is restricted to that tier's allowed
-    categories (Tier D → the sensitive set), matching the prompts exactly.
-    """
+def _response_schema() -> dict[str, Any]:
+    """Build the ``findings`` JSON schema for a full tiered report."""
     return {
         "type": "object",
         "properties": {
@@ -257,8 +256,8 @@ def _tier_response_schema(tier: str) -> dict[str, Any]:
                     "type": "object",
                     "properties": {
                         "subject": {"type": "string", "enum": ["self", "third_party"]},
-                        "category_id": {"type": "string", "enum": _TIER_CATEGORIES[tier]},
-                        "tier": {"type": "string", "enum": [tier]},
+                        "category_id": {"type": "string", "enum": _ALL_CATEGORIES},
+                        "tier": {"type": "string", "enum": list(TIERS)},
                         "claim": {"type": "string"},
                         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
                         "reasoning": {"type": "string"},
@@ -307,10 +306,51 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def _evidence_signature(inf: Inference) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        sorted(
+            (ev.message_id, _normalize_for_match(ev.quote))
+            for ev in inf.evidence
+        )
+    )
+
+
+def _dedupe_inferences(inferences: list[Inference]) -> list[Inference]:
+    """Remove repeated findings as a final safety net."""
+    tier_rank = {"D": 0, "A": 1, "B": 2, "C": 3}
+    best_by_claim: dict[tuple[str, str, str], Inference] = {}
+    best_by_evidence: dict[tuple[str, str, tuple[tuple[str, str], ...]], Inference] = {}
+
+    for inf in sorted(inferences, key=lambda item: tier_rank.get(item.tier, 99)):
+        claim_key = (
+            inf.subject,
+            inf.category_id,
+            _normalize_for_match(inf.claim),
+        )
+        evidence_key = (
+            inf.subject,
+            inf.category_id,
+            _evidence_signature(inf),
+        )
+
+        existing = best_by_claim.get(claim_key) or best_by_evidence.get(evidence_key)
+        if existing is not None:
+            continue
+
+        best_by_claim[claim_key] = inf
+        best_by_evidence[evidence_key] = inf
+
+    deduped = list(best_by_claim.values())
+    tier_order = {t: i for i, t in enumerate(TIERS)}
+    deduped.sort(key=lambda inf: tier_order.get(inf.tier, 99))
+    return deduped
+
+
 @dataclass
 class ProfilerResult:
     inferences: list[Inference]
     model: str
+    mode: AnalysisMode = "conservative"
     dropped_evidence: int = 0
     dropped_inferences: int = 0
     generations: int = 1
@@ -469,10 +509,10 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def _call_tier(tier: str, system_prompt: str, transcript: str) -> list[dict]:
-    """Run one tier pass and return its raw ``findings`` dicts (tier stamped)."""
+def _call_model(system_prompt: str, mode_prompt: str, transcript: str) -> list[dict]:
+    """Run one full-report pass and return its raw ``findings`` dicts."""
     client = _get_client()
-    system_instruction = f"{system_prompt}\n\n{_load_tier_prompt(tier)}"
+    system_instruction = f"{system_prompt}\n\n{mode_prompt}\n\n{_load_all_tiers_prompt()}"
 
     try:
         response = client.models.generate_content(
@@ -483,13 +523,13 @@ def _call_tier(tier: str, system_prompt: str, transcript: str) -> list[dict]:
                 max_output_tokens=MAX_TOKENS,
                 temperature=TEMPERATURE,
                 response_mime_type="application/json",
-                response_json_schema=_tier_response_schema(tier),
+                response_json_schema=_response_schema(),
             ),
         )
     except genai_errors.APIError as exc:
-        raise ProfilerError(f"Gemini API error (tier {tier}): {exc}") from exc
+        raise ProfilerError(f"Gemini API error: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 — keep API-specific failures user-visible
-        raise ProfilerError(f"Gemini generation failed (tier {tier}): {exc}") from exc
+        raise ProfilerError(f"Gemini generation failed: {exc}") from exc
 
     payload = response.parsed
     if isinstance(payload, BaseModel):
@@ -497,22 +537,19 @@ def _call_tier(tier: str, system_prompt: str, transcript: str) -> list[dict]:
     if payload is None:
         text = response.text
         if not text:
-            raise ProfilerError(f"The model returned no text output (tier {tier}).")
+            raise ProfilerError("The model returned no text output.")
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ProfilerError(f"The model output was not valid JSON (tier {tier}): {exc}") from exc
+            raise ProfilerError(f"The model output was not valid JSON: {exc}") from exc
 
     if not isinstance(payload, dict):
-        raise ProfilerError(f"The model output was not a JSON object (tier {tier}).")
+        raise ProfilerError("The model output was not a JSON object.")
 
     findings = payload.get("findings")
     if not isinstance(findings, list):
-        raise ProfilerError(f"The model output did not contain a 'findings' array (tier {tier}).")
+        raise ProfilerError("The model output did not contain a 'findings' array.")
 
-    for finding in findings:
-        if isinstance(finding, dict):
-            finding["tier"] = tier  # trust the pass, not the model, for the tier
     return findings
 
 
@@ -550,7 +587,7 @@ def test_gemini_api(prompt: str = "Reply with exactly: Gemini API test ok") -> d
     }
 
 
-def run_profiler(messages: list[Message]) -> ProfilerResult:
+def run_profiler(messages: list[Message], mode: AnalysisMode = "conservative") -> ProfilerResult:
     """Profile a transcript and return validated inferences.
 
     Retries the whole generation (up to ``PROFILER_MAX_RETRIES``) only if a run
@@ -558,7 +595,7 @@ def run_profiler(messages: list[Message]) -> ProfilerResult:
     model hallucinated every quote.
     """
     if not messages:
-        return ProfilerResult(inferences=[], model=MODEL, generations=0)
+        return ProfilerResult(inferences=[], model=MODEL, mode=mode, generations=0)
 
     # Mock mode: return a grounded sample dossier without calling the LLM. Runs
     # through the same grounding path so evidence quotes are guaranteed valid.
@@ -566,59 +603,40 @@ def run_profiler(messages: list[Message]) -> ProfilerResult:
         inferences, dropped_ev, dropped_inf = _ground_inferences(
             _mock_raw_inferences(messages), messages
         )
+        tier_counts = {tier: sum(1 for inf in inferences if inf.tier == tier) for tier in TIERS}
         return ProfilerResult(
             inferences=inferences,
             model="mock",
+            mode=mode,
             dropped_evidence=dropped_ev,
             dropped_inferences=dropped_inf,
             generations=0,
             mock=True,
+            tier_counts=tier_counts,
         )
 
     _get_client()  # init once up front (fails fast if no key; avoids a thread race)
     system_prompt = _load_system_prompt()
+    mode_prompt = _load_mode_prompt(mode)
     transcript = _render_transcript(messages)
 
-    all_inferences: list[Inference] = []
-    tier_counts: dict[str, int] = {}
-    tier_errors: dict[str, str] = {}
-    total_dropped_evidence = 0
-    total_dropped_inferences = 0
-
-    def _run_tier(tier: str) -> tuple[list[Inference], int, int]:
-        return _ground_inferences(_call_tier(tier, system_prompt, transcript), messages)
-
-    # One focused pass per tier, run concurrently — latency ≈ the slowest tier.
-    with ThreadPoolExecutor(max_workers=len(TIERS)) as executor:
-        futures = {executor.submit(_run_tier, tier): tier for tier in TIERS}
-        for future in as_completed(futures):
-            tier = futures[future]
-            try:
-                inferences, dropped_ev, dropped_inf = future.result()
-            except ProfilerError as exc:
-                tier_errors[tier] = str(exc)
-                continue
-            all_inferences.extend(inferences)
-            tier_counts[tier] = len(inferences)
-            total_dropped_evidence += dropped_ev
-            total_dropped_inferences += dropped_inf
-
-    # If every tier failed, surface the error instead of returning empty silently.
-    if len(tier_errors) == len(TIERS):
-        raise ProfilerError("; ".join(f"{t}: {m}" for t, m in sorted(tier_errors.items())))
+    all_inferences, total_dropped_evidence, total_dropped_inferences = _ground_inferences(
+        _call_model(system_prompt, mode_prompt, transcript),
+        messages,
+    )
 
     # Order findings A -> B -> C -> D for a stable, tier-grouped stream.
-    tier_order = {t: i for i, t in enumerate(TIERS)}
-    all_inferences.sort(key=lambda inf: tier_order.get(inf.tier, 99))
+    all_inferences = _dedupe_inferences(all_inferences)
+    tier_counts = {tier: sum(1 for inf in all_inferences if inf.tier == tier) for tier in TIERS}
 
     return ProfilerResult(
         inferences=all_inferences,
         model=MODEL,
+        mode=mode,
         dropped_evidence=total_dropped_evidence,
         dropped_inferences=total_dropped_inferences,
         generations=1,
         tier_counts=tier_counts,
-        tier_errors=tier_errors,
     )
 
 

@@ -7,6 +7,7 @@ export const API_BASE =
 export type Role = "user" | "assistant";
 export type Tier = "A" | "B" | "C" | "D";
 export type Confidence = "low" | "medium" | "high";
+export type AnalysisMode = "conservative" | "speculative";
 
 export interface Message {
   id: string;
@@ -72,6 +73,7 @@ export interface Inference {
 export interface AnalyzeMeta {
   count: number;
   model: string;
+  mode: AnalysisMode;
   mock: boolean;
   tier_counts?: Record<string, number>;
   tier_errors?: Record<string, string>;
@@ -120,6 +122,11 @@ export interface AnalyzeHandlers {
   onDone?: (data: { count: number }) => void;
 }
 
+export interface AnalyzeOptions {
+  conversationId?: string;
+  mode?: AnalysisMode;
+}
+
 /**
  * POST /analyze — stream the dossier via SSE. Resolves with the full list of
  * inferences once the stream ends. Uses fetch (not EventSource) because the
@@ -128,12 +135,16 @@ export interface AnalyzeHandlers {
 export async function analyze(
   messages: Message[],
   handlers: AnalyzeHandlers = {},
-  conversationId?: string,
+  options: AnalyzeOptions = {},
 ): Promise<Inference[]> {
   const res = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, conversation_id: conversationId ?? null }),
+    body: JSON.stringify({
+      messages,
+      conversation_id: options.conversationId ?? null,
+      mode: options.mode ?? "conservative",
+    }),
   });
   if (!res.ok || !res.body) {
     const detail = await safeDetail(res);

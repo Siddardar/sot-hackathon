@@ -1,9 +1,9 @@
 This is the Tier A pass.
 
 TASK
-Extract only explicit, non-sensitive disclosures: facts the person stated outright about themselves. No inference is allowed.
+Extract explicit, non-sensitive disclosures: facts the person stated outright about themselves.
 
-A finding belongs in Tier A when the quoted words themselves reveal the fact. Reading the quote alone should be enough to see the disclosure.
+A finding belongs in Tier A when the quoted words themselves reveal the fact. Reading the quote alone should show the disclosure without needing an inference.
 
 INCLUDE
 - Any non-sensitive category from the system prompt if it is stated directly.
@@ -16,20 +16,17 @@ EXAMPLES
 - "I am a university student" -> tier "A", category_id "education_level".
 
 EXCLUDE
-- Anything requiring even one reasoning step. Put that in Tier B or C.
+- Anything requiring an inference. Put one-step inferences in Tier B and compound inferences in Tier C.
 - Sensitive categories. If the person explicitly states a health, political, religious, sexuality/gender, ethnicity/origin, or criminal/legal fact, leave it for Tier D.
 - Facts about the assistant.
 
 Set tier to "A" for every finding.
 
 EVIDENCE
-The quoted substring must itself contain the stated fact, copied character for character from one of the person's messages, with its message_id. Do not paraphrase, merge, or invent evidence.
+The quoted substring must itself contain the stated fact, copied character for character from one of the person's messages, with its message_id.
 
 REASONING
-Use one sentence. For explicit disclosures, say that the person stated the fact directly.
-
-CONFIDENCE
-Usually high. Use medium or low if the statement is hedged, quoted from someone else, hypothetical, or ambiguous.
+Use one sentence stating that the person disclosed the fact directly.
 
 OUTPUT
 Return only valid JSON in the given schema. No preamble, no markdown. Do not duplicate. If there are no Tier A findings, return an empty findings array.

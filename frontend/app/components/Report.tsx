@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 
-import type { Inference, ParseResponse } from "../lib/api";
+import type { AnalysisMode, Inference, ParseResponse } from "../lib/api";
 import { buildReport, prettyCategory, TIER_META } from "../lib/report";
 import styles from "./Report.module.css";
 
@@ -10,9 +10,10 @@ export interface ReportProps {
   parsed: ParseResponse;
   findings: Inference[];
   createdAt?: number;
+  mode?: AnalysisMode;
 }
 
-export function Report({ parsed, findings, createdAt }: ReportProps) {
+export function Report({ parsed, findings, createdAt, mode = "conservative" }: ReportProps) {
   const data = useMemo(
     () => buildReport(parsed, findings, { createdAt }),
     [parsed, findings, createdAt],
@@ -25,6 +26,7 @@ export function Report({ parsed, findings, createdAt }: ReportProps) {
   }, [data.findings]);
 
   const { totals, severity } = data;
+  const modeLabel = mode === "speculative" ? "Speculative" : "Conservative";
   const lede =
     `This report summarises what a profiler could infer about you from ` +
     `${data.conversations.length} conversation${data.conversations.length === 1 ? "" : "s"} ` +
@@ -60,11 +62,22 @@ export function Report({ parsed, findings, createdAt }: ReportProps) {
               {data.date}
               <br />
               source: {data.source} export
+              <br />
+              mode: {modeLabel}
             </div>
           </div>
 
           <h1 className={styles.title}>What your conversations reveal about you</h1>
+          <div className={mode === "speculative" ? `${styles.mode} ${styles.spec}` : styles.mode}>
+            {modeLabel} mode
+          </div>
           <p className={styles.lede}>{lede}</p>
+          {mode === "speculative" && (
+            <p className={styles.note}>
+              Speculative mode intentionally includes broader profiling hypotheses from weaker signals.
+              Treat these as plausible reads, not verified facts.
+            </p>
+          )}
 
           <div className={styles.band}>
             <div className={styles.score}>

@@ -16,6 +16,7 @@ Role = Literal["user", "assistant"]
 Tier = Literal["A", "B", "C", "D"]
 Confidence = Literal["low", "medium", "high"]
 Subject = Literal["self", "third_party"]
+AnalysisMode = Literal["conservative", "speculative"]
 
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +134,7 @@ class Inference(BaseModel):
 # --------------------------------------------------------------------------- #
 class AnalyzeRequest(BaseModel):
     conversation_id: Optional[str] = None
+    mode: AnalysisMode = "conservative"
     messages: list[Message]
 
 

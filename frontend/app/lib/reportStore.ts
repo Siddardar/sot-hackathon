@@ -1,7 +1,7 @@
 // Persists exposure reports in localStorage, keyed by a short hash, so a report
 // can be re-opened by revisiting /{id}. Client-only (uses localStorage + crypto).
 
-import type { Inference, ParseResponse } from "./api";
+import type { AnalysisMode, Inference, ParseResponse } from "./api";
 
 const PREFIX = "glasshouse:report:";
 const INDEX_KEY = "glasshouse:reports";
@@ -11,6 +11,7 @@ export interface StoredReport {
   id: string;
   createdAt: number;
   source: string;
+  mode?: AnalysisMode;
   parsed: ParseResponse;
   findings: Inference[];
 }
@@ -31,7 +32,8 @@ export function newReportId(): string {
 function summarize(report: StoredReport): string {
   const c = report.parsed.conversations.length;
   const f = report.findings.length;
-  return `${c} conversation${c === 1 ? "" : "s"} · ${f} finding${f === 1 ? "" : "s"}`;
+  const mode = report.mode ? ` · ${report.mode}` : "";
+  return `${c} conversation${c === 1 ? "" : "s"} · ${f} finding${f === 1 ? "" : "s"}${mode}`;
 }
 
 /** Save a report + update the index. Returns false if storage rejected it (e.g. quota). */
