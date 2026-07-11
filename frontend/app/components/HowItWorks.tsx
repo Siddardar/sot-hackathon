@@ -6,7 +6,7 @@ const STEPS = [
   },
   {
     number: "2",
-    title: "Tell reads it like a model would",
+    title: "Glasshouse reads it like a model would",
     description: "Surfacing the inferences an LLM makes silently.",
   },
   {

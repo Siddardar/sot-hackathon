@@ -4,7 +4,7 @@ export function Navbar() {
   return (
     <nav className="flex items-center justify-between border-b border-hairline px-6 py-[26px] sm:px-14">
       <span className="font-serif text-[20px] font-medium tracking-[-0.01em]">
-        Tell
+        Glasshouse
       </span>
 
       <div className="hidden items-center gap-8 text-[14px] font-medium text-muted md:flex">
@@ -18,13 +18,6 @@ export function Navbar() {
           </a>
         ))}
       </div>
-
-      <button
-        type="button"
-        className="rounded-full border-[1.5px] border-ink px-5 py-[9px] text-[13px] font-semibold transition-colors hover:bg-ink/[0.06]"
-      >
-        Sign in
-      </button>
     </nav>
   );
 }

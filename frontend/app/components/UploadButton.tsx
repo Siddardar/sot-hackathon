@@ -10,7 +10,7 @@ export function UploadButton() {
     <button
       type="button"
       onClick={handleUpload}
-      className="rounded-full bg-accent px-[30px] py-4 text-[15px] font-semibold text-accent-foreground transition-opacity hover:opacity-90"
+      className="rounded-full bg-accent px-[30px] py-4 text-[15px] font-semibold text-accent-foreground transition-opacity hover:opacity-90 cursor-pointer"
     >
       Upload a conversation
     </button>

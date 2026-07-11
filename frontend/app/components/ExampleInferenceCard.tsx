@@ -13,7 +13,7 @@ export function ExampleInferenceCard() {
       <div className="my-4 h-px bg-hairline" />
 
       <div className="mb-1.5 text-[13px] font-semibold text-ink">
-        Tell inferred:
+        Glasshouse inferred:
       </div>
       <div className="text-[14px] leading-[1.5] text-secondary">
         Possible burnout · upcoming medical visit · sleep disturbance

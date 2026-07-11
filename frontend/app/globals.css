@@ -34,3 +34,40 @@ body {
   background: var(--background);
   color: var(--ink);
 }
+
+/*
+ * Glasshouse motif: a faint greenhouse glazing grid with a soft diagonal
+ * light sheen, layered behind all content. Kept low-contrast so it reads as
+ * texture, not decoration, and never competes with the editorial type.
+ */
+.glass-backdrop {
+  background-color: var(--background);
+  background-image:
+    /* light glancing across the glass */
+    linear-gradient(
+      116deg,
+      rgba(255, 255, 255, 0) 20%,
+      rgba(255, 255, 255, 0.55) 44%,
+      rgba(255, 255, 255, 0) 60%
+    ),
+    /* soft glow toward the top, like a glasshouse roof */
+    radial-gradient(
+      130% 90% at 74% -15%,
+      rgba(255, 255, 255, 0.7) 0%,
+      rgba(255, 255, 255, 0) 55%
+    ),
+    /* vertical glazing bars — shadow edge + highlight edge for a beveled look */
+    repeating-linear-gradient(
+      to right,
+      transparent 0 118px,
+      rgba(36, 31, 26, 0.09) 118px 119px,
+      rgba(255, 255, 255, 0.7) 119px 120px
+    ),
+    /* horizontal glazing bars — panes taller than they are wide */
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 158px,
+      rgba(36, 31, 26, 0.09) 158px 159px,
+      rgba(255, 255, 255, 0.7) 159px 160px
+    );
+}

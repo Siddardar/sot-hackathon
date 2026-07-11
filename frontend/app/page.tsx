@@ -4,7 +4,7 @@ import { HowItWorks } from "./components/HowItWorks";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-background text-ink">
+    <main className="min-h-screen text-ink">
       <Navbar />
       <Hero />
       <HowItWorks />
