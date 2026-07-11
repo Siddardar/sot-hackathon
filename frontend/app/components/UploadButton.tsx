@@ -2,9 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { analyze, parseExport, type ExportFiles } from "../lib/api";
+
 type UploadMode = "json" | "zip" | "folder";
 
 const ACCEPTED_FILE_TYPES = ".json,application/json,.zip,application/zip,application/x-zip-compressed";
+
+/** Pick a file by basename from a folder selection, preferring the shallowest path. */
+function pickFolderFile(files: File[], basename: string): File | undefined {
+  const matches = files.filter(
+    (f) => (f.webkitRelativePath || f.name).split("/").pop() === basename,
+  );
+  if (matches.length === 0) return undefined;
+  return matches.sort(
+    (a, b) =>
+      (a.webkitRelativePath || a.name).split("/").length -
+      (b.webkitRelativePath || b.name).split("/").length,
+  )[0];
+}
 
 export function UploadButton() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -13,6 +28,59 @@ export function UploadButton() {
   const [isOpen, setIsOpen] = useState(false);
   const [selectionLabel, setSelectionLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  // Upload -> /parse -> /analyze, logging every step to the console.
+  const runPipeline = async (parts: ExportFiles) => {
+    setError(null);
+    try {
+      setStatus("Uploading & parsing…");
+      const parsed = await parseExport(parts);
+      console.log("[Glasshouse] /parse response:", parsed);
+      console.log(
+        `[Glasshouse] format=${parsed.format} · conversations=${parsed.conversations.length}`,
+      );
+      if (parsed.account) console.log("[Glasshouse] account (users.json):", parsed.account);
+      if (parsed.memory)
+        console.log("[Glasshouse] provider memory (memories.json):", parsed.memory);
+
+      const conversation = parsed.conversations[0];
+      if (!conversation) {
+        setStatus(null);
+        setError("No conversations with messages were found.");
+        return;
+      }
+
+      setStatus(`Analyzing "${conversation.title}"…`);
+      console.log(
+        `[Glasshouse] analyzing "${conversation.title}" (${conversation.messages.length} messages)…`,
+      );
+
+      const inferences = await analyze(
+        conversation.messages,
+        {
+          onMeta: (meta) =>
+            console.log(
+              `[Glasshouse] meta:`,
+              meta,
+              meta.mock ? "(sample output — profiler prompt not wired yet)" : "",
+            ),
+          onInference: (inf) =>
+            console.log(`[Glasshouse] inference [${inf.tier}] ${inf.category_id}:`, inf),
+          onError: (message) => console.error("[Glasshouse] analyze error:", message),
+          onDone: (data) => console.log("[Glasshouse] done:", data),
+        },
+        conversation.conversation_id,
+      );
+
+      console.log("[Glasshouse] full dossier:", inferences);
+      setStatus(`Done — ${inferences.length} inferences. Open the console to see them.`);
+    } catch (err) {
+      console.error("[Glasshouse] pipeline error:", err);
+      setStatus(null);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    }
+  };
 
   useEffect(() => {
     const folderInput = folderInputRef.current;
@@ -71,6 +139,8 @@ export function UploadButton() {
 
     setSelectionLabel(selectedFile.name);
     setError(null);
+    void runPipeline({ file: selectedFile });
+    event.target.value = "";
   };
 
   const handleFolderSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,8 +151,22 @@ export function UploadButton() {
     const firstPath = selectedFiles[0].webkitRelativePath;
     const folderName = firstPath.split("/")[0] || "Selected folder";
 
+    const conversationsFile = pickFolderFile(selectedFiles, "conversations.json");
+    if (!conversationsFile) {
+      setSelectionLabel(null);
+      setError("No conversations.json found in the selected folder.");
+      event.target.value = "";
+      return;
+    }
+
     setSelectionLabel(`${folderName} (${selectedFiles.length} files)`);
     setError(null);
+    void runPipeline({
+      file: conversationsFile,
+      users: pickFolderFile(selectedFiles, "users.json"),
+      memories: pickFolderFile(selectedFiles, "memories.json"),
+    });
+    event.target.value = "";
   };
 
   return (
@@ -144,13 +228,13 @@ export function UploadButton() {
         </div>
       )}
 
-      {(selectionLabel || error) && (
+      {(status || selectionLabel || error) && (
         <p
-          className={`mt-3 max-w-[260px] text-[13px] ${
+          className={`mt-3 max-w-[280px] text-[13px] ${
             error ? "text-accent" : "text-muted"
           }`}
         >
-          {error ?? `Selected: ${selectionLabel}`}
+          {error ?? status ?? `Selected: ${selectionLabel}`}
         </p>
       )}
     </div>

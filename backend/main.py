@@ -5,6 +5,7 @@ Endpoints
 * ``POST /parse``         — upload an export, get canonical conversations back.
 * ``POST /analyze``       — stream a dossier for one conversation (SSE).
 * ``POST /redact_rerun``  — re-profile a masked transcript and diff vs. original.
+* ``GET  /test_gemini``   — make a minimal real Gemini API call.
 * ``GET  /health``        — liveness/readiness probe.
 
 The app is stateless: transcripts live only for the lifetime of a request.
@@ -19,7 +20,7 @@ import time
 import zipfile
 from typing import Any, Iterator, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -122,24 +123,46 @@ def _load_export(raw: bytes) -> tuple[Any, Optional[Any], Optional[Any]]:
 # --------------------------------------------------------------------------- #
 # /parse
 # --------------------------------------------------------------------------- #
+async def _read_json_upload(upload: Optional[UploadFile]) -> Optional[Any]:
+    """Read and JSON-parse an optional uploaded file part; None if absent/malformed."""
+    if upload is None:
+        return None
+    raw = await upload.read()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
 @app.post("/parse", response_model=ParseResponse)
 async def parse(
     file: UploadFile = File(...),
     format: str = Form("auto"),
     human_only: bool = Form(True),
+    users: Optional[UploadFile] = File(None),
+    memories: Optional[UploadFile] = File(None),
 ) -> ParseResponse:
     """Parse an uploaded export into canonical conversations.
 
     Body: multipart with ``file`` (a ``.zip`` account export or a single
     ``conversations.json``), optional ``format`` (``auto`` | ``claude`` |
-    ``chatgpt`` | ``generic``), and optional ``human_only`` (default ``true`` —
-    keep only the user's messages).
+    ``chatgpt`` | ``generic``), optional ``human_only`` (default ``true`` — keep
+    only the user's messages), and optional ``users``/``memories`` file parts
+    (used by the "folder" upload path, which sends the three JSONs separately).
     """
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="The uploaded file is empty.")
 
     conversations_data, users_data, memories_data = _load_export(raw)
+
+    # Separately-uploaded parts (folder mode) fill in anything the main file lacked.
+    if users_data is None:
+        users_data = await _read_json_upload(users)
+    if memories_data is None:
+        memories_data = await _read_json_upload(memories)
 
     try:
         used_format, conversations = normalize(conversations_data, format)
@@ -185,7 +208,7 @@ def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
 
     Runs the (blocking) profiler once; findings are emitted one at a time so the
     UI can stagger them in. This is a sync generator so FastAPI runs it in a
-    worker thread and the blocking Anthropic call doesn't stall the event loop.
+    worker thread and the blocking Gemini call doesn't stall the event loop.
     """
     try:
         result = profiler.run_profiler(request.messages)
@@ -203,6 +226,7 @@ def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
         {
             "count": len(result.inferences),
             "model": result.model,
+            "mock": result.mock,
             "dropped_evidence": result.dropped_evidence,
             "dropped_inferences": result.dropped_inferences,
         },
@@ -260,15 +284,31 @@ def redact_rerun(request: RedactRerunRequest) -> RedactRerunResponse:
 # --------------------------------------------------------------------------- #
 # Health / root
 # --------------------------------------------------------------------------- #
+@app.get("/test_gemini")
+def test_gemini(
+    prompt: str = Query(
+        "Reply with exactly: Gemini API test ok",
+        min_length=1,
+        max_length=500,
+    ),
+) -> dict:
+    """Verify the Gemini SDK/API key/model with a small real generation."""
+    try:
+        return profiler.test_gemini_api(prompt)
+    except profiler.ProfilerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.get("/health")
 def health() -> dict:
     return {
         "status": "ok",
         "model": profiler.MODEL,
-        "api_key_configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "mock_mode": profiler.use_mock(),
+        "api_key_configured": profiler.api_key_configured(),
     }
 
 
 @app.get("/")
 def root() -> dict:
-    return {"name": "Memory Leak", "endpoints": ["/parse", "/analyze", "/redact_rerun", "/health"]}
+    return {"name": "Memory Leak", "endpoints": ["/parse", "/analyze", "/redact_rerun", "/test_gemini", "/health"]}

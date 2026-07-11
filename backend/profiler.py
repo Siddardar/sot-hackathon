@@ -18,23 +18,53 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import anthropic
+from dotenv import load_dotenv
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
+from pydantic import BaseModel
 
 from schemas import Evidence, Inference, Message, Redaction
+
+# Load backend/.env so GOOGLE_API_KEY (and other config) is picked up without
+# having to export it or pass --env-file. Existing env vars take precedence.
+load_dotenv(Path(__file__).parent / ".env")
+
+
+def _google_api_key() -> Optional[str]:
+    return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+
+
+def api_key_configured() -> bool:
+    return bool(_google_api_key())
+
 
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-MODEL = os.environ.get("PROFILER_MODEL", "claude-opus-4-8")
+MODEL = os.environ.get("PROFILER_MODEL", "gemini-3.5-flash")
 MAX_TOKENS = int(os.environ.get("PROFILER_MAX_TOKENS", "16000"))
-EFFORT = os.environ.get("PROFILER_EFFORT", "medium")  # low | medium | high | max
-# Adaptive thinking improves inference quality; set PROFILER_THINKING=off to disable.
-THINKING_ENABLED = os.environ.get("PROFILER_THINKING", "on").lower() not in ("off", "0", "false")
+TEMPERATURE = float(os.environ.get("PROFILER_TEMPERATURE", "0.3"))
 MAX_GENERATION_RETRIES = int(os.environ.get("PROFILER_MAX_RETRIES", "1"))
+
+
+def use_mock() -> bool:
+    """Whether to return a sample dossier instead of calling the LLM.
+
+    ``PROFILER_MOCK`` = ``1``/``on`` forces mock, ``0``/``off`` forces real; the
+    default ``auto`` mocks whenever no Gemini API key is configured — so the
+    whole pipeline works end to end before the prompts/keys are wired up.
+    """
+    setting = os.environ.get("PROFILER_MOCK", "auto").lower()
+    if setting in ("1", "true", "on", "yes"):
+        return True
+    if setting in ("0", "false", "off", "no"):
+        return False
+    return not api_key_configured()
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "profiler_system.md"
@@ -244,6 +274,7 @@ class ProfilerResult:
     dropped_evidence: int = 0
     dropped_inferences: int = 0
     generations: int = 1
+    mock: bool = False
 
 
 def _ground_inferences(
@@ -293,56 +324,179 @@ def _ground_inferences(
 
 
 # --------------------------------------------------------------------------- #
+# Mock dossier (used until prompts/keys are wired up)
+# --------------------------------------------------------------------------- #
+# (keywords, category_id, tier, claim, confidence, reasoning)
+_MOCK_RULES: list[tuple[tuple[str, ...], str, str, str, str, str]] = [
+    (("morocco", "malta", "itinerary", "trip", "travel", "flying"),
+     "socioeconomic", "C", "Travels internationally and plans multi-day trips", "medium",
+     "Discussing international travel plans signals disposable income and leisure travel habits."),
+    (("fpga", "vivado", "cva6", "risc-v", "processor", "mmu", "vhdl", "verilog"),
+     "occupation_inferred", "B", "Works in hardware / computer architecture", "high",
+     "Hardware-design jargon points to an engineering or CS background."),
+    (("wireshark", "scapy", "packet", "airdrop", "ssh", "tunnel", "network"),
+     "occupation_inferred", "B", "Comfortable with networking and systems analysis", "medium",
+     "References to packet capture and networking tools indicate technical, systems-level work."),
+    (("python", "venv", "homebrew", "macos", "macbook", "jupyter"),
+     "occupation_inferred", "B", "Develops software, likely on a Mac", "medium",
+     "Developer tooling and a macOS environment suggest a software-development workflow."),
+    (("student", "assignment", "course", "hackathon", "ects", "university", "lecture"),
+     "education_level", "C", "Is a student in higher education", "medium",
+     "Coursework and academic-credit references indicate current enrolment."),
+    (("azure", "aws", "cloud", "vm", "server", "minecraft"),
+     "occupation_inferred", "B", "Runs cloud infrastructure for personal/side projects", "low",
+     "Managing cloud VMs suggests hands-on infrastructure experience."),
+    (("anxiety", "therapy", "ssri", "depress", "insomnia", "burnout"),
+     "health_mental", "D", "May be managing a mental-health condition", "low",
+     "Mentions of mood, therapy, or medication are sensitive health signals."),
+]
+
+_SENTENCE_BOUNDARY = re.compile(r"[.!?\n]")
+
+
+def _sentence_around(content: str, match_start: int, match_end: int) -> str:
+    """Return the sentence (verbatim substring) containing a keyword match."""
+    left = 0
+    for m in _SENTENCE_BOUNDARY.finditer(content, 0, match_start):
+        left = m.end()
+    right_match = _SENTENCE_BOUNDARY.search(content, match_end)
+    right = right_match.start() if right_match else len(content)
+    quote = content[left:right].strip()
+    return quote[:240] if len(quote) > 240 else quote
+
+
+def _mock_raw_inferences(messages: list[Message]) -> list[dict]:
+    """Build a realistic, evidence-grounded sample dossier without an LLM."""
+    user_messages = [m for m in messages if m.role == "user"]
+    raw: list[dict] = []
+    used_categories: set[str] = set()
+
+    for keywords, category_id, tier, claim, confidence, reasoning in _MOCK_RULES:
+        if category_id in used_categories:
+            continue
+        # Whole-word match so e.g. "ects" doesn't match inside "Projects".
+        pattern = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in keywords) + r")\b")
+        for msg in user_messages:
+            match = pattern.search(msg.content.lower())
+            if not match:
+                continue
+            quote = _sentence_around(msg.content, match.start(), match.end())
+            if not quote:
+                continue
+            raw.append({
+                "category_id": category_id, "tier": tier, "claim": claim,
+                "confidence": confidence, "reasoning": reasoning,
+                "evidence": [{"message_id": msg.id, "quote": quote}],
+            })
+            used_categories.add(category_id)
+            break
+
+    # Ensure the dossier is never empty: quote the first user message.
+    if not raw and user_messages:
+        first = user_messages[0]
+        quote = _sentence_around(first.content, 0, 0) or first.content[:180]
+        raw.append({
+            "category_id": "personality_traits", "tier": "C",
+            "claim": "Engages AI assistants for detailed, technical help",
+            "confidence": "low",
+            "reasoning": "Sample inference — the profiler prompt is not wired up yet.",
+            "evidence": [{"message_id": first.id, "quote": quote}],
+        })
+    return raw
+
+
+# --------------------------------------------------------------------------- #
 # LLM call
 # --------------------------------------------------------------------------- #
-_client: Optional[anthropic.Anthropic] = None
+_client: Optional[genai.Client] = None
 
 
-def _get_client() -> anthropic.Anthropic:
+def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        api_key = _google_api_key()
+        if not api_key:
             raise ProfilerError(
-                "ANTHROPIC_API_KEY is not set. Export it before calling the profiler."
+                "GOOGLE_API_KEY or GEMINI_API_KEY is not set. Export one before calling the profiler."
             )
-        _client = anthropic.Anthropic()
+        _client = genai.Client(api_key=api_key)
     return _client
 
 
 def _call_model(system_prompt: str, transcript: str) -> list[dict]:
-    """Run one structured, streamed generation and return the raw inference dicts."""
+    """Run one structured Gemini generation and return the raw inference dicts."""
     client = _get_client()
 
-    output_config: dict[str, Any] = {
-        "effort": EFFORT,
-        "format": {"type": "json_schema", "schema": _DOSSIER_SCHEMA},
-    }
-    kwargs: dict[str, Any] = {
-        "model": MODEL,
-        "max_tokens": MAX_TOKENS,
-        "system": system_prompt,
-        "output_config": output_config,
-        "messages": [{"role": "user", "content": transcript}],
-    }
-    if THINKING_ENABLED:
-        kwargs["thinking"] = {"type": "adaptive"}
-
-    with client.messages.stream(**kwargs) as stream:
-        message = stream.get_final_message()
-
-    text = next((block.text for block in message.content if block.type == "text"), None)
-    if not text:
-        raise ProfilerError("The model returned no text output.")
-
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ProfilerError(f"The model output was not valid JSON: {exc}") from exc
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=transcript,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=MAX_TOKENS,
+                temperature=TEMPERATURE,
+                response_mime_type="application/json",
+                response_json_schema=_DOSSIER_SCHEMA,
+            ),
+        )
+    except genai_errors.APIError as exc:
+        raise ProfilerError(f"Gemini API error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — keep API-specific failures user-visible
+        raise ProfilerError(f"Gemini generation failed: {exc}") from exc
+
+    payload = response.parsed
+    if isinstance(payload, BaseModel):
+        payload = payload.model_dump()
+    if payload is None:
+        text = response.text
+        if not text:
+            raise ProfilerError("The model returned no text output.")
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ProfilerError(f"The model output was not valid JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise ProfilerError("The model output was not a JSON object.")
 
     inferences = payload.get("inferences")
     if not isinstance(inferences, list):
         raise ProfilerError("The model output did not contain an 'inferences' array.")
     return inferences
+
+
+def test_gemini_api(prompt: str = "Reply with exactly: Gemini API test ok") -> dict[str, Any]:
+    """Make a minimal real Gemini call to verify API key, model, and SDK wiring."""
+    client = _get_client()
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=256,
+                temperature=0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+    except genai_errors.APIError as exc:
+        raise ProfilerError(f"Gemini API error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — keep SDK/config failures visible
+        raise ProfilerError(f"Gemini test call failed: {exc}") from exc
+
+    text = response.text or "".join(
+        part.text or ""
+        for candidate in response.candidates or []
+        for part in (candidate.content.parts if candidate.content and candidate.content.parts else [])
+    )
+    if not text:
+        raise ProfilerError("Gemini test call returned no text output.")
+
+    return {
+        "ok": True,
+        "model": MODEL,
+        "text": text.strip(),
+    }
 
 
 def run_profiler(messages: list[Message]) -> ProfilerResult:
@@ -354,6 +508,21 @@ def run_profiler(messages: list[Message]) -> ProfilerResult:
     """
     if not messages:
         return ProfilerResult(inferences=[], model=MODEL, generations=0)
+
+    # Mock mode: return a grounded sample dossier without calling the LLM. Runs
+    # through the same grounding path so evidence quotes are guaranteed valid.
+    if use_mock():
+        inferences, dropped_ev, dropped_inf = _ground_inferences(
+            _mock_raw_inferences(messages), messages
+        )
+        return ProfilerResult(
+            inferences=inferences,
+            model="mock",
+            dropped_evidence=dropped_ev,
+            dropped_inferences=dropped_inf,
+            generations=0,
+            mock=True,
+        )
 
     taxonomy = _load_taxonomy()
     system_prompt = _load_system_prompt(_build_taxonomy_section(taxonomy))

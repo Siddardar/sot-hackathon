@@ -1,7 +1,7 @@
 # Memory Leak — Backend
 
 FastAPI service that normalizes an uploaded chat export and returns a
-privacy-leakage dossier from a profiler LLM (Claude), with every inference
+privacy-leakage dossier from a profiler LLM (Gemini), with every inference
 linked to the exact sentence that leaked it.
 
 ## Run
@@ -10,11 +10,37 @@ linked to the exact sentence that leaked it.
 cd backend
 python3 -m venv venv                 # (already created)
 ./venv/bin/pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...   # required for /analyze and /redact_rerun
+export GOOGLE_API_KEY=...             # or GEMINI_API_KEY; required for real /analyze and /redact_rerun
 ./venv/bin/uvicorn main:app --reload --port 8000
 ```
 
 Config lives in env vars — see `.env.example`.
+
+### End-to-end with the frontend (mock mode)
+
+No API key needed to test the wiring. With `GOOGLE_API_KEY` / `GEMINI_API_KEY` unset, the
+profiler auto-runs in **mock mode** and returns a grounded sample dossier.
+
+```bash
+# terminal 1 — backend on :8000 (mock mode, no key required)
+cd backend && ./venv/bin/uvicorn main:app --reload --port 8000
+
+# terminal 2 — frontend on :3000
+cd frontend && npm run dev
+```
+
+Open the app, click **Upload a conversation**, and pick the Claude export
+(ZIP, a single `conversations.json`, or the export Folder). The frontend POSTs
+to `/parse`, then streams `/analyze`, and **logs everything to the browser
+console** (`[Glasshouse] …`): the parse result, `account` (users.json), provider
+`memory` (memories.json), each streamed inference, and the full dossier. The
+`meta` event carries `mock: true` so you can tell sample output apart from real.
+
+Point the frontend at a non-default backend with `NEXT_PUBLIC_API_BASE`
+(defaults to `http://localhost:8000`).
+
+The real profiler uses the Gemini SDK. Set `PROFILER_MODEL` to override the
+default model (`gemini-3.5-flash`).
 
 ## Endpoints
 
@@ -23,7 +49,8 @@ Config lives in env vars — see `.env.example`.
 | POST   | `/parse`         | multipart: `file` (a `.zip` account export **or** a single `conversations.json`) + `format` (`auto`\|`claude`\|`chatgpt`\|`generic`) + `human_only` (default `true`) | `{format, conversations[], summaries[], account?, memory?}` |
 | POST   | `/analyze`       | `{conversation_id?, messages[]}` | **SSE stream** — `meta`, one `inference` per finding, then `done` (`error` on failure) |
 | POST   | `/redact_rerun`  | `{messages[], redacted_message_ids[], redactions[]?, original_inferences[]?}` | `{inferences[], diff}` |
-| GET    | `/health`        | — | `{status, model, api_key_configured}` |
+| GET    | `/test_gemini`   | optional query: `prompt` | `{ok, model, text}` from a minimal real Gemini call |
+| GET    | `/health`        | — | `{status, model, mock_mode, api_key_configured}` |
 
 The canonical transcript and dossier schemas are defined in `schemas.py`.
 
@@ -55,7 +82,7 @@ You can also upload a bare `conversations.json` (no `account`/`memory` returned)
 
 ```
 event: meta
-data: {"count": 12, "model": "claude-opus-4-8", "dropped_evidence": 1, "dropped_inferences": 0}
+data: {"count": 12, "model": "gemini-3.5-flash", "dropped_evidence": 1, "dropped_inferences": 0}
 
 event: inference
 data: {"category_id": "...", "tier": "D", "claim": "...", "confidence": "high", "reasoning": "...", "evidence": [{"message_id": "m3", "quote": "..."}]}
