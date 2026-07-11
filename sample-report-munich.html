@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Data Leak: Exposure Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#3a3d44;font-family:"Inter",system-ui,sans-serif;padding:28px 16px;color:#15171d;-webkit-font-smoothing:antialiased}
+  .sheet{
+    max-width:720px;margin:0 auto;background:#fbfaf6;border-radius:12px;overflow:hidden;
+    box-shadow:0 30px 80px -24px rgba(0,0,0,.7);
+  }
+  .toolbar{
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:12px 18px;background:#f3f1e8;border-bottom:1px solid #e6e3d8;
+  }
+  .toolbar .t{font-family:"IBM Plex Mono";font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8a8574}
+  .toolbar button{
+    font-family:"IBM Plex Mono";font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    color:#fbfaf6;background:#1a1c22;border:none;padding:9px 16px;border-radius:7px;cursor:pointer;
+  }
+  .toolbar button:hover{filter:brightness(1.25)}
+  .rp{padding:44px clamp(26px,5vw,54px) 50px}
+
+  .brand{display:flex;align-items:center;justify-content:space-between;padding-bottom:18px;border-bottom:2px solid #1a1c22;margin-bottom:28px}
+  .brand .name{font-family:"Space Grotesk";font-weight:700;font-size:14px;letter-spacing:.1em;text-transform:uppercase}
+  .brand .name span{color:#a89a4a}
+  .brand .stamp{font-family:"IBM Plex Mono";font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#8a8574;text-align:right;line-height:1.7}
+
+  h1{font-family:"Space Grotesk";font-weight:600;font-size:clamp(26px,4vw,34px);line-height:1.1;letter-spacing:-.02em;margin-bottom:9px;max-width:20ch}
+  .lede{font-size:14.5px;line-height:1.6;color:#494e58;max-width:64ch;margin-bottom:30px}
+
+  .band{display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:center;padding:20px 22px;border-radius:12px;margin-bottom:32px;background:#f1efe4;border:1px solid #e2dfd2}
+  .band .score{text-align:center;padding-right:22px;border-right:1px solid #ddd9cc}
+  .band .score .n{font-family:"Space Grotesk";font-weight:700;font-size:50px;line-height:.9}
+  .band .score .l{font-family:"IBM Plex Mono";font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#8a8574;margin-top:6px}
+  .band .pill{font-family:"IBM Plex Mono";font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:99px;color:#fff;background:#c0392b;display:inline-block;margin-bottom:8px}
+  .band p{font-size:12.5px;line-height:1.5;color:#494e58}
+
+  .h{font-family:"IBM Plex Mono";font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#8a8574;margin:32px 0 14px;padding-bottom:8px;border-bottom:1px solid #e2dfd2}
+  .h b{color:#15171d;font-weight:600}
+
+  .tier{display:grid;grid-template-columns:210px 1fr auto;gap:14px;align-items:center;font-size:12.5px;margin-bottom:10px}
+  .tier .nm{display:flex;align-items:center;gap:9px;color:#33373f}
+  .tier .nm i{width:10px;height:10px;border-radius:2px;flex:none}
+  .tier .bar{height:8px;border-radius:99px;background:#e6e3d8;overflow:hidden}
+  .tier .bar span{display:block;height:100%;border-radius:99px}
+  .tier .num{font-family:"IBM Plex Mono";font-size:11px;color:#8a8574;white-space:nowrap}
+  .tier .num b{color:#15171d}
+  @media(max-width:560px){.tier{grid-template-columns:1fr auto}.tier .bar{display:none}}
+
+  .find{padding:15px 0;border-bottom:1px solid #eae7dc}
+  .find:last-of-type{border-bottom:none}
+  .find .top{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .find .cat{font-family:"IBM Plex Mono";font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:4px;font-weight:600}
+  .find .claim{font-family:"Space Grotesk";font-weight:600;font-size:15px;color:#15171d;line-height:1.3}
+  .find .conf{margin-left:auto;font-family:"IBM Plex Mono";font-size:10px;text-transform:uppercase;color:#a29e8f}
+  .find .reason{font-size:12.5px;line-height:1.55;color:#5a5f69;margin-bottom:8px}
+  .find .q{font-size:12.5px;line-height:1.5;color:#33373f;padding:8px 12px;border-left:2px solid var(--tc);background:#f3f1e6;border-radius:0 6px 6px 0;margin-top:4px}
+  .find .q mark{background:#ffd447;padding:0 2px;border-radius:2px}
+  .find .q .src{font-family:"IBM Plex Mono";font-size:9.5px;color:#a29e8f;display:block;margin-top:4px;letter-spacing:.04em}
+
+  .rec{display:flex;flex-direction:column;gap:10px}
+  .rec .item{display:flex;gap:12px;font-size:13.5px;line-height:1.55;color:#33373f}
+  .rec .item i{font-style:normal;font-family:"IBM Plex Mono";font-size:11px;color:#a89a4a;flex:none;padding-top:2px}
+
+  .gov{margin-top:14px;padding:20px 22px;border-radius:12px;background:#eef1ee;border:1px solid #dbe0da;border-left:3px solid #4a9d6b}
+  .gov .gh{font-family:"Space Grotesk";font-weight:600;font-size:14px;color:#1f3a2a;display:flex;align-items:center;gap:9px;margin-bottom:14px}
+  .gov .gh .b{font-family:"IBM Plex Mono";font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#2c6a45;background:#d6e6dc;padding:3px 8px;border-radius:99px;font-weight:600}
+  .gov ul{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:11px 22px}
+  .gov li{display:flex;gap:9px;font-size:12.5px;line-height:1.5;color:#33454a}
+  .gov li::before{content:"\2713";color:#4a9d6b;font-weight:700;flex:none}
+  .gov .law{margin-top:14px;padding-top:12px;border-top:1px solid #dbe0da;font-family:"IBM Plex Mono";font-size:10px;line-height:1.7;color:#6b8072}
+  .gov .law b{color:#3a5344}
+  @media(max-width:560px){.gov ul{grid-template-columns:1fr}}
+
+  .foot{margin-top:36px;padding-top:18px;border-top:1px solid #e2dfd2;font-family:"IBM Plex Mono";font-size:10px;line-height:1.8;color:#8a8574}
+  .foot b{color:#5a5f69}
+
+  .appendix{margin-top:14px}
+  .msg{padding:11px 0;border-bottom:1px solid #eee9dc;font-size:13px;line-height:1.55}
+  .msg:last-child{border-bottom:none}
+  .msg .who{font-family:"IBM Plex Mono";font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:#a29e8f;margin-bottom:3px}
+  .msg.user .who{color:#2f7048}
+  .msg .who .t{color:#c0bcac;margin-left:8px}
+  .msg.assistant{color:#8a8574}
+
+  @media print{
+    body{background:#fff;padding:0}
+    .sheet{box-shadow:none;border-radius:0;max-width:none}
+    .toolbar{display:none}
+    .find,.band,.tier,.gov{break-inside:avoid}
+    .h{break-after:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="toolbar">
+    <span class="t">Exposure report / sample</span>
+    <button onclick="window.print()">Save as PDF</button>
+  </div>
+  <div class="rp">
+
+    <div class="brand">
+      <div class="name">Personal Data <span>Leak</span></div>
+      <div class="stamp">Exposure report<br>2026-07-11 15:08 UTC<br>source: chatgpt_export.json</div>
+    </div>
+
+    <h1>What this conversation reveals about you</h1>
+    <p class="lede">This report summarises what a profiler could infer about the account holder from their conversation history with an AI assistant, spanning five sessions over several weeks. It found 15 distinct inferences across 15 categories, including 4 that fall under special category data protected by GDPR Article 9.</p>
+
+    <div class="band">
+      <div class="score"><div class="n">43</div><div class="l">Leakage score</div></div>
+      <div>
+        <span class="pill">Severe exposure</span>
+        <p>This history exposes multiple sensitive attributes (health, mental health, religion, and political activity) alongside enough detail to identify the person and their household. Treat it as high risk if shared or breached.</p>
+      </div>
+    </div>
+
+    <div class="h">Exposure by <b>tier</b></div>
+    <div class="tier"><div class="nm"><i style="background:#e0574a"></i>Tier D: Sensitive (Art. 9)</div><div class="bar"><span style="width:100%;background:#e0574a"></span></div><div class="num"><b>4</b> · 20 pts</div></div>
+    <div class="tier"><div class="nm"><i style="background:#e0a132"></i>Tier C: Compound</div><div class="bar"><span style="width:45%;background:#e0a132"></span></div><div class="num"><b>3</b> · 9 pts</div></div>
+    <div class="tier"><div class="nm"><i style="background:#5b8def"></i>Tier B: Direct</div><div class="bar"><span style="width:30%;background:#5b8def"></span></div><div class="num"><b>3</b> · 6 pts</div></div>
+    <div class="tier"><div class="nm"><i style="background:#2fb3a3"></i>Tier M: Metadata</div><div class="bar"><span style="width:30%;background:#2fb3a3"></span></div><div class="num"><b>3</b> · 6 pts</div></div>
+    <div class="tier"><div class="nm"><i style="background:#a89a4a"></i>Tier A: Explicit</div><div class="bar"><span style="width:10%;background:#a89a4a"></span></div><div class="num"><b>2</b> · 2 pts</div></div>
+
+    <div class="h">Tier D <b>Sensitive (GDPR Article 9)</b></div>
+
+    <div class="find" style="--tc:#e0574a">
+      <div class="top"><span class="cat" style="background:#f8ded9;color:#a3372c">health physical</span><span class="claim">Has type 1 diabetes and is insulin dependent</span><span class="conf">high</span></div>
+      <div class="reason">The person doses insulin and is being moved onto a continuous glucose monitor by an endocrinologist, both specific to insulin-treated diabetes.</div>
+      <div class="q">my endocrinologist wants me on a <mark>CGM</mark> but my insurance is being difficult<span class="src">from m5</span></div>
+    </div>
+
+    <div class="find" style="--tc:#e0574a">
+      <div class="top"><span class="cat" style="background:#f8ded9;color:#a3372c">health mental</span><span class="claim">Experiences anxiety that disrupts sleep and self-care</span><span class="conf">high</span></div>
+      <div class="reason">The person reports anxiety affecting insulin routine and repeated late-night sleeplessness, and links it to the divorce.</div>
+      <div class="q">i keep forgetting to bolus when my <mark>anxiety is bad, been worse since everything with the divorce</mark><span class="src">from m6</span></div>
+    </div>
+
+    <div class="find" style="--tc:#e0574a">
+      <div class="top"><span class="cat" style="background:#f8ded9;color:#a3372c">religion beliefs</span><span class="claim">Is Jewish and observes Shabbat</span><span class="conf">high</span></div>
+      <div class="reason">The person is hosting a Shabbat dinner, which indicates Jewish religious practice.</div>
+      <div class="q">need a vegetarian recipe for the <mark>shabbat dinner i'm hosting</mark>, my mom's coming<span class="src">from m9</span></div>
+    </div>
+
+    <div class="find" style="--tc:#e0574a">
+      <div class="top"><span class="cat" style="background:#f8ded9;color:#a3372c">political views</span><span class="claim">Is a politically active environmental campaigner</span><span class="conf">medium</span></div>
+      <div class="reason">The person is speaking at a green network meeting and lobbying the city council, which signals an environmental political alignment and activism.</div>
+      <div class="q">i'm speaking at the <mark>Grünes Netzwerk meeting</mark> thursday<span class="src">from m8</span></div>
+    </div>
+
+    <div class="h">Tier C <b>Compound inference</b></div>
+
+    <div class="find" style="--tc:#e0a132">
+      <div class="top"><span class="cat" style="background:#f5e6c8;color:#8a5a12">life events</span><span class="claim">Is mid divorce with a custody dispute and considering leaving her job and city</span><span class="conf">high</span></div>
+      <div class="reason">Across sessions the person drafts a resignation, negotiates custody through a lawyer, and talks about moving near her parents. Together these mark a major life transition in progress.</div>
+      <div class="q">i just want to move back near my parents in <mark>Nuremberg</mark><span class="src">from m7</span></div>
+    </div>
+
+    <div class="find" style="--tc:#e0a132">
+      <div class="top"><span class="cat" style="background:#f5e6c8;color:#8a5a12">socioeconomic</span><span class="claim">Insured with a specific German public health fund and navigating coverage friction</span><span class="conf">medium</span></div>
+      <div class="reason">The person names their statutory insurer and a dispute over device coverage, which places them in the German public health system and indicates cost sensitivity.</div>
+      <div class="q">my insurance (<mark>TK</mark>) is being difficult<span class="src">from m5</span></div>
+    </div>
+
+    <div class="find" style="--tc:#e0a132">
+      <div class="top"><span class="cat" style="background:#f5e6c8;color:#8a5a12">personality traits</span><span class="claim">Tends to avoid open conflict</span><span class="conf">medium</span></div>
+      <div class="reason">The person wants to reply to a lawyer without sounding aggressive, suggesting a conflict-avoidant communication style. Based on one exchange, so it may be situational.</div>
+      <div class="q">how do i respond to my ex's lawyer <mark>without sounding aggressive</mark><span class="src">from m7</span></div>
+    </div>
+
+    <div class="h">Tier B <b>Direct inference</b></div>
+
+    <div class="find" style="--tc:#5b8def">
+      <div class="top"><span class="cat" style="background:#dde8fb;color:#2f5aa0">location inferred</span><span class="claim">Lives in the Sendling district of Munich</span><span class="conf">high</span></div>
+      <div class="reason">The person describes a U-Bahn commute from Sendling, a Munich district, placing their home there.</div>
+      <div class="q">the commute from <mark>sendling</mark> is also killing me, 45 min each way on the u-bahn<span class="src">from m1</span></div>
+    </div>
+
+    <div class="find" style="--tc:#5b8def">
+      <div class="top"><span class="cat" style="background:#dde8fb;color:#2f5aa0">relationships</span><span class="claim">Is a single parent to a young child, with an ex-partner and parents in Nuremberg</span><span class="conf">high</span></div>
+      <div class="reason">The person collects a child from daycare, negotiates custody with an ex, and refers to parents in another city.</div>
+      <div class="q">i need something with regular hours so i can pick up my son from <mark>kita</mark><span class="src">from m2</span></div>
+    </div>
+
+    <div class="find" style="--tc:#5b8def">
+      <div class="top"><span class="cat" style="background:#dde8fb;color:#2f5aa0">daily routine</span><span class="claim">Works early shifts starting at 6am with disrupted sleep</span><span class="conf">medium</span></div>
+      <div class="reason">The person mentions an early shift at 6 while messaging after 2am, indicating shift work and poor sleep.</div>
+      <div class="q">i have an <mark>early shift at 6</mark> tomorrow<span class="src">from m11</span></div>
+    </div>
+
+    <div class="h">Tier M <b>Metadata</b></div>
+
+    <div class="find" style="--tc:#2fb3a3">
+      <div class="top"><span class="cat" style="background:#d3efe8;color:#1a7a68">activity pattern</span><span class="claim">Repeatedly awake and messaging after 2am</span><span class="conf">medium</span></div>
+      <div class="reason">Several sessions begin after 02:00 local time, consistent with the reported insomnia.</div>
+      <div class="q">session start times include 02:14 and 02:31<span class="src">from message metadata</span></div>
+    </div>
+
+    <div class="find" style="--tc:#2fb3a3">
+      <div class="top"><span class="cat" style="background:#d3efe8;color:#1a7a68">language origin</span><span class="claim">German first language or long-term resident</span><span class="conf">medium</span></div>
+      <div class="reason">The person writes in English but reaches for German terms (kita, bretzel, klinikum, U-Bahn), a common pattern for native German speakers.</div>
+      <div class="q">what's the carb count in a typical <mark>bretzel</mark><span class="src">from m4</span></div>
+    </div>
+
+    <div class="find" style="--tc:#2fb3a3">
+      <div class="top"><span class="cat" style="background:#d3efe8;color:#1a7a68">timezone inferred</span><span class="claim">Located in Central European Time</span><span class="conf">high</span></div>
+      <div class="reason">Message clock times and the stated Munich location agree on UTC+1.</div>
+      <div class="q">message times consistent with UTC+1<span class="src">from message metadata</span></div>
+    </div>
+
+    <div class="h">Tier A <b>Explicit disclosure</b></div>
+
+    <div class="find" style="--tc:#a89a4a">
+      <div class="top"><span class="cat" style="background:#ece6d0;color:#7a6e30">occupation</span><span class="claim">Works as a pediatric nurse with six years of tenure</span><span class="conf">high</span></div>
+      <div class="reason">Occupation, specialism, and length of service are stated directly.</div>
+      <div class="q">i've been a <mark>pediatric nurse at the klinikum for 6 years</mark><span class="src">from m0</span></div>
+    </div>
+
+    <div class="find" style="--tc:#a89a4a">
+      <div class="top"><span class="cat" style="background:#ece6d0;color:#7a6e30">relationships</span><span class="claim">Marital status: divorced</span><span class="conf">high</span></div>
+      <div class="reason">Stated directly in the context of changing work hours.</div>
+      <div class="q">since the <mark>divorce</mark> i need something with regular hours<span class="src">from m2</span></div>
+    </div>
+
+    <div class="h">What you can <b>do</b></div>
+    <div class="rec">
+      <div class="item"><i>01</i><span>This history reveals special category information (health, mental health, religion, and political activity). These are the details most worth keeping out of a general assistant, or reserving for a local model.</span></div>
+      <div class="item"><i>02</i><span>The messages carrying the most exposure are m5, m6, and m2. Redacting or rephrasing these removes a large share of the profile, including three of the four sensitive findings.</span></div>
+      <div class="item"><i>03</i><span>Turning off chat history or memory would stop this profile accumulating across sessions, which is what turned separate topics into one detailed picture.</span></div>
+      <div class="item"><i>04</i><span>Treat an exported chat history like a diary. If you would not hand the file to a stranger, do not upload it, share it, or leave it in a synced folder.</span></div>
+    </div>
+
+    <div class="h">How this tool <b>treats your data</b></div>
+    <div class="gov">
+      <div class="gh"><span class="b">Governance</span> Built to inform you</div>
+      <ul>
+        <li>It analyses only the conversation you chose, and only your messages within it.</li>
+        <li>It does not build profiles of other people you mention.</li>
+        <li>It makes inferences, not findings of fact, and each shows the sentence it came from.</li>
+        <li>It does not decide anything about you and does not score you as a person.</li>
+        <li>In this demonstration your upload is processed in memory and is not stored or logged.</li>
+        <li>Sensitive inferences are shown only so you can see your own exposure.</li>
+      </ul>
+      <div class="law">Privacy by design: purpose limitation, data minimisation, and transparency under the <b>GDPR</b>, and outside the prohibited and high-risk practices of the <b>EU AI Act</b> (no social scoring, no automated decisions about you, no third-party profiling).</div>
+    </div>
+
+    <div class="foot">
+      Generated by Personal Data Leak, a research demonstration for the ML and Society hackathon.
+      Findings are inferences produced by a language model and are <b>not verified fact</b>. Some are wrong by design, which is part of what the tool demonstrates about automated profiling.
+      Tier D maps to special category data under GDPR Article 9. This report is not legal advice.
+    </div>
+
+    <div class="h">Appendix <b>source transcript</b></div>
+    <div class="appendix">
+      <div class="msg user"><div class="who">You <span class="t">session 1 · 18:22</span></div>can you help me write a resignation letter? i've been a pediatric nurse at the klinikum for 6 years but i can't do the night shifts anymore</div>
+      <div class="msg assistant"><div class="who">Assistant</div>Of course. Do you want it warm and appreciative, or short and formal?</div>
+      <div class="msg user"><div class="who">You <span class="t">18:24</span></div>the commute from sendling is also killing me, 45 min each way on the u-bahn</div>
+      <div class="msg user"><div class="who">You <span class="t">18:26</span></div>honestly since the divorce i need something with regular hours so i can actually pick up my son from kita</div>
+      <div class="msg assistant"><div class="who">Assistant</div>That makes sense. Regular daytime hours would help with childcare. Here is a draft you can adapt.</div>
+      <div class="msg user"><div class="who">You <span class="t">session 2 · 12:03</span></div>what's the carb count in a typical bretzel? trying to dose my insulin right</div>
+      <div class="msg user"><div class="who">You <span class="t">12:05</span></div>my endocrinologist wants me on a CGM but my insurance (TK) is being difficult</div>
+      <div class="msg user"><div class="who">You <span class="t">session 3 · 21:40</span></div>i also keep forgetting to bolus when my anxiety is bad, been worse since everything with the divorce</div>
+      <div class="msg user"><div class="who">You <span class="t">session 4 · 19:11</span></div>how do i respond to my ex's lawyer without sounding aggressive? he's asking for more custody of Max</div>
+      <div class="msg user"><div class="who">You <span class="t">19:20</span></div>i'm so done. i just want to move back near my parents in Nuremberg</div>
+      <div class="msg user"><div class="who">You <span class="t">session 5 · 17:02</span></div>what are good arguments to bring to the city council about the new bike lane proposal? i'm speaking at the Grünes Netzwerk meeting thursday</div>
+      <div class="msg user"><div class="who">You <span class="t">17:05</span></div>also need a vegetarian recipe for the shabbat dinner i'm hosting, my mom's coming</div>
+      <div class="msg user"><div class="who">You <span class="t">session 6 · 02:14</span></div>can't sleep again. can you just talk me through a breathing exercise</div>
+      <div class="msg user"><div class="who">You <span class="t">02:31</span></div>thanks. i have an early shift at 6 tomorrow</div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
