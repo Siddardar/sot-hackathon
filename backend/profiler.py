@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -66,8 +67,37 @@ def use_mock() -> bool:
         return False
     return not api_key_configured()
 
-_PROMPTS_DIR = Path(__file__).parent / "prompts"
-_SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "profiler_system.md"
+# Prompts live at the repo root (../prompts relative to this file). Override the
+# location with GLASSHOUSE_PROMPTS_DIR if needed.
+_PROMPTS_DIR = Path(
+    os.environ.get("GLASSHOUSE_PROMPTS_DIR") or (Path(__file__).resolve().parent.parent / "prompts")
+)
+_SYSTEM_PROMPT_PATH = _PROMPTS_DIR / "system_prompt.md"
+_TIER_PROMPT_FILES = {
+    "A": "tier_a_prompt.md",
+    "B": "tier_b_prompt.md",
+    "C": "tier_c_prompt.md",
+    "D": "tier_d_prompt.md",
+}
+TIERS: tuple[str, ...] = ("A", "B", "C", "D")
+
+# Category ids, copied from prompts/system_prompt.md. A/B/C use the non-sensitive
+# set; Tier D uses only the sensitive set (sensitivity overrides A/B/C).
+_NON_SENSITIVE_CATEGORIES = [
+    "identity", "location", "contact", "occupation", "relationships",
+    "daily_routine", "socioeconomic", "education_level", "personality_traits",
+    "interests_lifestyle", "technical_profile",
+]
+_SENSITIVE_CATEGORIES = [
+    "health_physical", "health_mental", "sexuality_gender", "religion_beliefs",
+    "political_views", "ethnicity_origin", "criminal_or_legal",
+]
+_TIER_CATEGORIES = {
+    "A": _NON_SENSITIVE_CATEGORIES,
+    "B": _NON_SENSITIVE_CATEGORIES,
+    "C": _NON_SENSITIVE_CATEGORIES,
+    "D": _SENSITIVE_CATEGORIES,
+}
 
 
 class ProfilerError(RuntimeError):
@@ -190,59 +220,69 @@ Rules:
 """
 
 
-def _load_system_prompt(taxonomy_section: str) -> str:
-    """Load the system prompt from prompts/, falling back to the built-in one.
+def _load_system_prompt() -> str:
+    """Load the shared system prompt (``prompts/system_prompt.md``) verbatim.
 
-    ``{taxonomy}`` in the prompt file is replaced with the rendered taxonomy; if
-    the placeholder is absent, the taxonomy is appended.
+    The category list is baked into the prompt, so no taxonomy injection is
+    needed. Falls back to the built-in default if the file is missing.
     """
     if _SYSTEM_PROMPT_PATH.exists():
-        template = _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    else:
-        template = _DEFAULT_SYSTEM_PROMPT
+        return _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    return _DEFAULT_SYSTEM_PROMPT
 
-    if "{taxonomy}" in template:
-        return template.replace("{taxonomy}", taxonomy_section)
-    return f"{template}\n\nCategories:\n{taxonomy_section}"
+
+def _load_tier_prompt(tier: str) -> str:
+    """Load the per-tier prompt (``prompts/tier_{a,b,c,d}_prompt.md``)."""
+    path = _PROMPTS_DIR / _TIER_PROMPT_FILES[tier]
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return f'This is the Tier {tier} pass. Set tier to "{tier}" for every finding.'
 
 
 # --------------------------------------------------------------------------- #
-# Output schema for structured generation
+# Output schema for structured generation (one per tier)
 # --------------------------------------------------------------------------- #
-_DOSSIER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "inferences": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "category_id": {"type": "string"},
-                    "tier": {"type": "string", "enum": ["A", "B", "C", "D"]},
-                    "claim": {"type": "string"},
-                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "reasoning": {"type": "string"},
-                    "evidence": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "message_id": {"type": "string"},
-                                "quote": {"type": "string"},
+def _tier_response_schema(tier: str) -> dict[str, Any]:
+    """Build the ``findings`` JSON schema for a single tier pass.
+
+    ``tier`` is fixed and ``category_id`` is restricted to that tier's allowed
+    categories (Tier D → the sensitive set), matching the prompts exactly.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string", "enum": ["self", "third_party"]},
+                        "category_id": {"type": "string", "enum": _TIER_CATEGORIES[tier]},
+                        "tier": {"type": "string", "enum": [tier]},
+                        "claim": {"type": "string"},
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "reasoning": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "message_id": {"type": "string"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": ["message_id", "quote"],
+                                "additionalProperties": False,
                             },
-                            "required": ["message_id", "quote"],
-                            "additionalProperties": False,
                         },
                     },
+                    "required": ["subject", "category_id", "tier", "claim", "confidence", "reasoning", "evidence"],
+                    "additionalProperties": False,
                 },
-                "required": ["category_id", "tier", "claim", "confidence", "reasoning", "evidence"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["inferences"],
-    "additionalProperties": False,
-}
+            }
+        },
+        "required": ["findings"],
+        "additionalProperties": False,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -275,6 +315,8 @@ class ProfilerResult:
     dropped_inferences: int = 0
     generations: int = 1
     mock: bool = False
+    tier_counts: dict[str, int] = field(default_factory=dict)
+    tier_errors: dict[str, str] = field(default_factory=dict)
 
 
 def _ground_inferences(
@@ -305,9 +347,11 @@ def _ground_inferences(
             dropped_inferences += 1
             continue
 
+        subject = raw.get("subject")
         try:
             inferences.append(
                 Inference(
+                    subject=subject if subject in ("self", "third_party") else "self",
                     category_id=str(raw.get("category_id", "")),
                     tier=raw.get("tier"),
                     claim=str(raw.get("claim", "")),
@@ -332,19 +376,19 @@ _MOCK_RULES: list[tuple[tuple[str, ...], str, str, str, str, str]] = [
      "socioeconomic", "C", "Travels internationally and plans multi-day trips", "medium",
      "Discussing international travel plans signals disposable income and leisure travel habits."),
     (("fpga", "vivado", "cva6", "risc-v", "processor", "mmu", "vhdl", "verilog"),
-     "occupation_inferred", "B", "Works in hardware / computer architecture", "high",
+     "occupation", "B", "Works in hardware / computer architecture", "high",
      "Hardware-design jargon points to an engineering or CS background."),
     (("wireshark", "scapy", "packet", "airdrop", "ssh", "tunnel", "network"),
-     "occupation_inferred", "B", "Comfortable with networking and systems analysis", "medium",
+     "occupation", "B", "Comfortable with networking and systems analysis", "medium",
      "References to packet capture and networking tools indicate technical, systems-level work."),
     (("python", "venv", "homebrew", "macos", "macbook", "jupyter"),
-     "occupation_inferred", "B", "Develops software, likely on a Mac", "medium",
+     "occupation", "B", "Develops software, likely on a Mac", "medium",
      "Developer tooling and a macOS environment suggest a software-development workflow."),
     (("student", "assignment", "course", "hackathon", "ects", "university", "lecture"),
      "education_level", "C", "Is a student in higher education", "medium",
      "Coursework and academic-credit references indicate current enrolment."),
     (("azure", "aws", "cloud", "vm", "server", "minecraft"),
-     "occupation_inferred", "B", "Runs cloud infrastructure for personal/side projects", "low",
+     "occupation", "B", "Runs cloud infrastructure for personal/side projects", "low",
      "Managing cloud VMs suggests hands-on infrastructure experience."),
     (("anxiety", "therapy", "ssri", "depress", "insomnia", "burnout"),
      "health_mental", "D", "May be managing a mental-health condition", "low",
@@ -384,6 +428,7 @@ def _mock_raw_inferences(messages: list[Message]) -> list[dict]:
             if not quote:
                 continue
             raw.append({
+                "subject": "self",
                 "category_id": category_id, "tier": tier, "claim": claim,
                 "confidence": confidence, "reasoning": reasoning,
                 "evidence": [{"message_id": msg.id, "quote": quote}],
@@ -396,6 +441,7 @@ def _mock_raw_inferences(messages: list[Message]) -> list[dict]:
         first = user_messages[0]
         quote = _sentence_around(first.content, 0, 0) or first.content[:180]
         raw.append({
+            "subject": "self",
             "category_id": "personality_traits", "tier": "C",
             "claim": "Engages AI assistants for detailed, technical help",
             "confidence": "low",
@@ -423,26 +469,27 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def _call_model(system_prompt: str, transcript: str) -> list[dict]:
-    """Run one structured Gemini generation and return the raw inference dicts."""
+def _call_tier(tier: str, system_prompt: str, transcript: str) -> list[dict]:
+    """Run one tier pass and return its raw ``findings`` dicts (tier stamped)."""
     client = _get_client()
+    system_instruction = f"{system_prompt}\n\n{_load_tier_prompt(tier)}"
 
     try:
         response = client.models.generate_content(
             model=MODEL,
             contents=transcript,
             config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
+                system_instruction=system_instruction,
                 max_output_tokens=MAX_TOKENS,
                 temperature=TEMPERATURE,
                 response_mime_type="application/json",
-                response_json_schema=_DOSSIER_SCHEMA,
+                response_json_schema=_tier_response_schema(tier),
             ),
         )
     except genai_errors.APIError as exc:
-        raise ProfilerError(f"Gemini API error: {exc}") from exc
+        raise ProfilerError(f"Gemini API error (tier {tier}): {exc}") from exc
     except Exception as exc:  # noqa: BLE001 — keep API-specific failures user-visible
-        raise ProfilerError(f"Gemini generation failed: {exc}") from exc
+        raise ProfilerError(f"Gemini generation failed (tier {tier}): {exc}") from exc
 
     payload = response.parsed
     if isinstance(payload, BaseModel):
@@ -450,19 +497,23 @@ def _call_model(system_prompt: str, transcript: str) -> list[dict]:
     if payload is None:
         text = response.text
         if not text:
-            raise ProfilerError("The model returned no text output.")
+            raise ProfilerError(f"The model returned no text output (tier {tier}).")
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ProfilerError(f"The model output was not valid JSON: {exc}") from exc
+            raise ProfilerError(f"The model output was not valid JSON (tier {tier}): {exc}") from exc
 
     if not isinstance(payload, dict):
-        raise ProfilerError("The model output was not a JSON object.")
+        raise ProfilerError(f"The model output was not a JSON object (tier {tier}).")
 
-    inferences = payload.get("inferences")
-    if not isinstance(inferences, list):
-        raise ProfilerError("The model output did not contain an 'inferences' array.")
-    return inferences
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        raise ProfilerError(f"The model output did not contain a 'findings' array (tier {tier}).")
+
+    for finding in findings:
+        if isinstance(finding, dict):
+            finding["tier"] = tier  # trust the pass, not the model, for the tier
+    return findings
 
 
 def test_gemini_api(prompt: str = "Reply with exactly: Gemini API test ok") -> dict[str, Any]:
@@ -524,38 +575,50 @@ def run_profiler(messages: list[Message]) -> ProfilerResult:
             mock=True,
         )
 
-    taxonomy = _load_taxonomy()
-    system_prompt = _load_system_prompt(_build_taxonomy_section(taxonomy))
+    _get_client()  # init once up front (fails fast if no key; avoids a thread race)
+    system_prompt = _load_system_prompt()
     transcript = _render_transcript(messages)
 
+    all_inferences: list[Inference] = []
+    tier_counts: dict[str, int] = {}
+    tier_errors: dict[str, str] = {}
     total_dropped_evidence = 0
     total_dropped_inferences = 0
-    attempts = 0
 
-    for attempt in range(MAX_GENERATION_RETRIES + 1):
-        attempts = attempt + 1
-        raw = _call_model(system_prompt, transcript)
-        inferences, dropped_ev, dropped_inf = _ground_inferences(raw, messages)
-        total_dropped_evidence += dropped_ev
-        total_dropped_inferences += dropped_inf
+    def _run_tier(tier: str) -> tuple[list[Inference], int, int]:
+        return _ground_inferences(_call_tier(tier, system_prompt, transcript), messages)
 
-        # Success, or nothing to retry (the model genuinely found nothing).
-        if inferences or not raw:
-            return ProfilerResult(
-                inferences=inferences,
-                model=MODEL,
-                dropped_evidence=total_dropped_evidence,
-                dropped_inferences=total_dropped_inferences,
-                generations=attempts,
-            )
-        # else: the model returned inferences but all were ungrounded — retry.
+    # One focused pass per tier, run concurrently — latency ≈ the slowest tier.
+    with ThreadPoolExecutor(max_workers=len(TIERS)) as executor:
+        futures = {executor.submit(_run_tier, tier): tier for tier in TIERS}
+        for future in as_completed(futures):
+            tier = futures[future]
+            try:
+                inferences, dropped_ev, dropped_inf = future.result()
+            except ProfilerError as exc:
+                tier_errors[tier] = str(exc)
+                continue
+            all_inferences.extend(inferences)
+            tier_counts[tier] = len(inferences)
+            total_dropped_evidence += dropped_ev
+            total_dropped_inferences += dropped_inf
+
+    # If every tier failed, surface the error instead of returning empty silently.
+    if len(tier_errors) == len(TIERS):
+        raise ProfilerError("; ".join(f"{t}: {m}" for t, m in sorted(tier_errors.items())))
+
+    # Order findings A -> B -> C -> D for a stable, tier-grouped stream.
+    tier_order = {t: i for i, t in enumerate(TIERS)}
+    all_inferences.sort(key=lambda inf: tier_order.get(inf.tier, 99))
 
     return ProfilerResult(
-        inferences=[],
+        inferences=all_inferences,
         model=MODEL,
         dropped_evidence=total_dropped_evidence,
         dropped_inferences=total_dropped_inferences,
-        generations=attempts,
+        generations=1,
+        tier_counts=tier_counts,
+        tier_errors=tier_errors,
     )
 
 

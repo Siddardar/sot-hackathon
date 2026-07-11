@@ -227,6 +227,8 @@ def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
             "count": len(result.inferences),
             "model": result.model,
             "mock": result.mock,
+            "tier_counts": result.tier_counts,
+            "tier_errors": result.tier_errors,
             "dropped_evidence": result.dropped_evidence,
             "dropped_inferences": result.dropped_inferences,
         },
@@ -311,4 +313,4 @@ def health() -> dict:
 
 @app.get("/")
 def root() -> dict:
-    return {"name": "Memory Leak", "endpoints": ["/parse", "/analyze", "/redact_rerun", "/test_gemini", "/health"]}
+    return {"name": "Glasshouse", "endpoints": ["/parse", "/analyze", "/redact_rerun", "/test_gemini", "/health"]}

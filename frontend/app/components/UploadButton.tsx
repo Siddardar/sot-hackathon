@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { analyze, parseExport, type ExportFiles } from "../lib/api";
+import { newReportId, saveReport } from "../lib/reportStore";
 
 type UploadMode = "json" | "zip" | "folder";
 
@@ -29,10 +30,12 @@ export function UploadButton() {
   const [selectionLabel, setSelectionLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [reportId, setReportId] = useState<string | null>(null);
 
-  // Upload -> /parse -> /analyze, logging every step to the console.
+  // Upload -> /parse -> /analyze -> persist the report and open it in a new tab.
   const runPipeline = async (parts: ExportFiles) => {
     setError(null);
+    setReportId(null);
     try {
       setStatus("Uploading & parsing…");
       const parsed = await parseExport(parts);
@@ -44,37 +47,59 @@ export function UploadButton() {
       if (parsed.memory)
         console.log("[Glasshouse] provider memory (memories.json):", parsed.memory);
 
-      const conversation = parsed.conversations[0];
-      if (!conversation) {
+      // Analyze the whole folder: every conversation's (human) messages together.
+      const allMessages = parsed.conversations.flatMap((c) => c.messages);
+      if (allMessages.length === 0) {
         setStatus(null);
-        setError("No conversations with messages were found.");
+        setError("No messages were found to analyze.");
         return;
       }
 
-      setStatus(`Analyzing "${conversation.title}"…`);
+      setStatus(
+        `Analyzing ${parsed.conversations.length} conversations (${allMessages.length} messages)…`,
+      );
       console.log(
-        `[Glasshouse] analyzing "${conversation.title}" (${conversation.messages.length} messages)…`,
+        `[Glasshouse] analyzing ${parsed.conversations.length} conversations, ${allMessages.length} messages across 4 tier passes…`,
       );
 
-      const inferences = await analyze(
-        conversation.messages,
-        {
-          onMeta: (meta) =>
-            console.log(
-              `[Glasshouse] meta:`,
-              meta,
-              meta.mock ? "(sample output — profiler prompt not wired yet)" : "",
-            ),
-          onInference: (inf) =>
-            console.log(`[Glasshouse] inference [${inf.tier}] ${inf.category_id}:`, inf),
-          onError: (message) => console.error("[Glasshouse] analyze error:", message),
-          onDone: (data) => console.log("[Glasshouse] done:", data),
-        },
-        conversation.conversation_id,
-      );
+      const inferences = await analyze(allMessages, {
+        onMeta: (meta) =>
+          console.log(
+            `[Glasshouse] meta:`,
+            meta,
+            "tier_counts:",
+            meta.tier_counts,
+            meta.mock ? "(sample output — profiler in mock mode)" : "",
+          ),
+        onInference: (inf) =>
+          console.log(
+            `[Glasshouse] finding [${inf.tier}] ${inf.category_id} (${inf.subject ?? "self"}):`,
+            inf,
+          ),
+        onError: (message) => console.error("[Glasshouse] analyze error:", message),
+        onDone: (data) => console.log("[Glasshouse] done:", data),
+      });
 
       console.log("[Glasshouse] full dossier:", inferences);
-      setStatus(`Done — ${inferences.length} inferences. Open the console to see them.`);
+
+      // Persist the report locally and open it in a new tab at /{id}.
+      const id = newReportId();
+      const saved = saveReport({
+        id,
+        createdAt: Date.now(),
+        source: parsed.format,
+        parsed,
+        findings: inferences,
+      });
+      setReportId(id);
+      setStatus(
+        saved
+          ? `Done — ${inferences.length} findings.`
+          : `Done — ${inferences.length} findings (couldn't save locally; use the link below now).`,
+      );
+      // Best-effort auto-open; the await above means popup blockers may stop it,
+      // so the "Open report" link below is the reliable path.
+      window.open(`/${id}`, "_blank", "noopener");
     } catch (err) {
       console.error("[Glasshouse] pipeline error:", err);
       setStatus(null);
@@ -236,6 +261,17 @@ export function UploadButton() {
         >
           {error ?? status ?? `Selected: ${selectionLabel}`}
         </p>
+      )}
+
+      {reportId && !error && (
+        <a
+          href={`/${reportId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
+        >
+          Open report ↗
+        </a>
       )}
     </div>
   );

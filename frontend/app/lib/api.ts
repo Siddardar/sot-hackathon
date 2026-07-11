@@ -57,7 +57,10 @@ export interface Evidence {
   quote: string;
 }
 
+export type Subject = "self" | "third_party";
+
 export interface Inference {
+  subject?: Subject;
   category_id: string;
   tier: Tier;
   claim: string;
@@ -70,6 +73,8 @@ export interface AnalyzeMeta {
   count: number;
   model: string;
   mock: boolean;
+  tier_counts?: Record<string, number>;
+  tier_errors?: Record<string, string>;
   dropped_evidence: number;
   dropped_inferences: number;
 }

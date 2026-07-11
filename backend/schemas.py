@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 Role = Literal["user", "assistant"]
 Tier = Literal["A", "B", "C", "D"]
 Confidence = Literal["low", "medium", "high"]
+Subject = Literal["self", "third_party"]
 
 
 # --------------------------------------------------------------------------- #
@@ -113,9 +114,13 @@ class Evidence(BaseModel):
 
 
 class Inference(BaseModel):
-    """One thing a profiler could infer about the user, with its evidence."""
+    """One thing a profiler could infer about the user, with its evidence.
 
-    category_id: str = Field(description="Matches an id in the leakage taxonomy.")
+    (In the prompts these are called "findings" and carry a ``subject``.)
+    """
+
+    subject: Subject = "self"
+    category_id: str = Field(description="Matches a category id in the taxonomy.")
     tier: Tier
     claim: str = Field(description="Short natural-language inference about the user.")
     confidence: Confidence
