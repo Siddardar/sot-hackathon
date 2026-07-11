@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import type { ReactNode } from "react";
 
 import type { AnalysisMode, Inference, ParseResponse } from "../lib/api";
 import { buildReport, prettyCategory, TIER_META } from "../lib/report";
@@ -13,16 +14,56 @@ export interface ReportProps {
   mode?: AnalysisMode;
 }
 
+function highlightEvidenceQuotes(content: string, quotes: string[]): ReactNode {
+  const matches = quotes
+    .filter(Boolean)
+    .flatMap((quote) => {
+      const ranges: Array<{ start: number; end: number }> = [];
+      let cursor = 0;
+      for (;;) {
+        const start = content.indexOf(quote, cursor);
+        if (start === -1) break;
+        ranges.push({ start, end: start + quote.length });
+        cursor = start + quote.length;
+      }
+      return ranges;
+    })
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+
+  for (const match of matches) {
+    if (match.start < cursor) continue;
+    if (match.start > cursor) {
+      parts.push(content.slice(cursor, match.start));
+    }
+    parts.push(<mark key={`evidence-${key++}`}>{content.slice(match.start, match.end)}</mark>);
+    cursor = match.end;
+  }
+
+  if (cursor === 0) return content;
+  if (cursor < content.length) parts.push(content.slice(cursor));
+  return parts;
+}
+
 export function Report({ parsed, findings, createdAt, mode = "conservative" }: ReportProps) {
   const data = useMemo(
     () => buildReport(parsed, findings, { createdAt }),
     [parsed, findings, createdAt],
   );
 
-  const citedIds = useMemo(() => {
-    const s = new Set<string>();
-    for (const f of data.findings) for (const ev of f.evidence) s.add(ev.message_id);
-    return s;
+  const quotesByMessage = useMemo(() => {
+    const quotes = new Map<string, string[]>();
+    for (const finding of data.findings) {
+      for (const ev of finding.evidence) {
+        const existing = quotes.get(ev.message_id) ?? [];
+        if (!existing.includes(ev.quote)) existing.push(ev.quote);
+        quotes.set(ev.message_id, existing);
+      }
+    }
+    return quotes;
   }, [data.findings]);
 
   const { totals, severity } = data;
@@ -200,11 +241,12 @@ export function Report({ parsed, findings, createdAt, mode = "conservative" }: R
               <div className={styles.conv} key={conv.conversation_id}>
                 <div className={styles.convTitle}>{conv.title}</div>
                 {conv.messages.map((m) => {
-                  const cited = citedIds.has(m.id);
+                  const quotes = quotesByMessage.get(m.id) ?? [];
+                  const cited = quotes.length > 0;
                   return (
                     <div className={cited ? `${styles.msg} ${styles.cited}` : styles.msg} key={m.id}>
                       <div className={styles.who}>You · {data.labelOf(m.id)}</div>
-                      {m.content}
+                      {highlightEvidenceQuotes(m.content, quotes)}
                     </div>
                   );
                 })}

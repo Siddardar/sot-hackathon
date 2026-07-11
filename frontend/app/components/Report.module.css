@@ -320,10 +320,10 @@
   margin-top: 6px;
 }
 .find .q mark {
-  background: #ffe58a;
+  background: transparent;
   color: inherit;
-  padding: 0 2px;
-  border-radius: 2px;
+  padding: 0;
+  border-radius: 0;
 }
 .find .q .src {
   font-family: var(--font-inter);
@@ -467,12 +467,17 @@
   margin-bottom: 3px;
 }
 .msg.cited {
-  background: var(--background);
-  border-radius: 6px;
-  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
 }
 .msg.cited .who {
   color: var(--accent);
+}
+.msg mark {
+  background: #ffe58a;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
 }
 
 .empty {
