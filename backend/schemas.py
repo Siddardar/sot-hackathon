@@ -50,6 +50,39 @@ class ConversationSummary(BaseModel):
     preview: str
 
 
+class Account(BaseModel):
+    """Known account identity, taken from the export's ``users.json``.
+
+    This is ground-truth metadata the user gave the provider (not inferred from
+    the transcript), so it has no sentence to quote — the frontend surfaces it
+    separately as guaranteed, Tier-A identity leakage.
+    """
+
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class ProjectMemory(BaseModel):
+    """One per-project memory the provider retained."""
+
+    project_id: str
+    memory: str
+
+
+class ProviderMemory(BaseModel):
+    """The provider's *own* inferred profile of the user, from ``memories.json``.
+
+    This is not produced by our tool — it is what the AI provider already
+    remembers and has inferred across conversations. The frontend surfaces it as
+    a "what the provider already knows about you" panel, distinct from our
+    transcript-derived, evidence-linked dossier.
+    """
+
+    conversations_memory: Optional[str] = None
+    project_memories: list[ProjectMemory] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # /parse
 # --------------------------------------------------------------------------- #
@@ -58,12 +91,15 @@ class ParseResponse(BaseModel):
 
     Returns the full canonical conversations (so the frontend can pass the
     chosen one straight to ``/analyze`` without re-uploading) plus a lightweight
-    summary list for the picker.
+    summary list for the picker. When the upload is a full account export, the
+    known ``account`` identity is included.
     """
 
     format: str = Field(description="The format that was detected/used, e.g. 'claude', 'chatgpt', 'generic'.")
     conversations: list[Conversation]
     summaries: list[ConversationSummary]
+    account: Optional[Account] = None
+    memory: Optional[ProviderMemory] = None
 
 
 # --------------------------------------------------------------------------- #

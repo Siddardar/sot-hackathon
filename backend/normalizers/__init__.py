@@ -16,10 +16,26 @@ from typing import Any
 from schemas import Conversation
 
 from . import chatgpt, claude, generic
+from .claude import parse_memories, parse_users
 
 
 class UnsupportedFormatError(ValueError):
     """Raised when an upload does not match any known format."""
+
+
+def to_user_only(conversations: list[Conversation]) -> list[Conversation]:
+    """Return conversations containing only the user's (human) messages.
+
+    Assistant turns don't leak the *user's* information and roughly double the
+    token count, so we drop them for the compact transcript. Conversations left
+    with no user messages are removed.
+    """
+    result: list[Conversation] = []
+    for conv in conversations:
+        user_messages = [m for m in conv.messages if m.role == "user"]
+        if user_messages:
+            result.append(conv.model_copy(update={"messages": user_messages}))
+    return result
 
 
 def detect_format(data: Any) -> str:
@@ -67,4 +83,11 @@ def normalize(data: Any, fmt: str = "auto") -> tuple[str, list[Conversation]]:
     return fmt, conversations
 
 
-__all__ = ["normalize", "detect_format", "UnsupportedFormatError"]
+__all__ = [
+    "normalize",
+    "detect_format",
+    "to_user_only",
+    "parse_users",
+    "parse_memories",
+    "UnsupportedFormatError",
+]

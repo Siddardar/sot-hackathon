@@ -20,12 +20,36 @@ Config lives in env vars — see `.env.example`.
 
 | Method | Path             | Body | Returns |
 |--------|------------------|------|---------|
-| POST   | `/parse`         | multipart: `file` (JSON export) + `format` (`auto`\|`claude`\|`chatgpt`\|`generic`) | `{format, conversations[], summaries[]}` |
+| POST   | `/parse`         | multipart: `file` (a `.zip` account export **or** a single `conversations.json`) + `format` (`auto`\|`claude`\|`chatgpt`\|`generic`) + `human_only` (default `true`) | `{format, conversations[], summaries[], account?, memory?}` |
 | POST   | `/analyze`       | `{conversation_id?, messages[]}` | **SSE stream** — `meta`, one `inference` per finding, then `done` (`error` on failure) |
 | POST   | `/redact_rerun`  | `{messages[], redacted_message_ids[], redactions[]?, original_inferences[]?}` | `{inferences[], diff}` |
 | GET    | `/health`        | — | `{status, model, api_key_configured}` |
 
 The canonical transcript and dossier schemas are defined in `schemas.py`.
+
+### Upload handling
+
+A Claude account export is a `.zip` containing `conversations.json`, `users.json`,
+`memories.json`, `projects/`, and `design_chats/`. `/parse` uses the top-level
+`conversations.json`, `users.json`, and `memories.json`:
+
+- **`conversations.json`** → canonical conversations. With `human_only=true`
+  (default) assistant turns are dropped — the user's own messages are what leak
+  their information, and this roughly halves the token count sent to the profiler
+  (measured **~78%** fewer characters on a real export). Empty and file-only
+  conversations are skipped.
+- **`users.json`** → the `account` block (`name`, `email`, `phone`). This is
+  ground-truth identity the user gave the provider, so it has no sentence to
+  quote; the frontend surfaces it separately as guaranteed Tier-A leakage rather
+  than as an evidence-linked inference.
+- **`memories.json`** → the `memory` block: the provider's *own* inferred profile
+  of the user (`conversations_memory` markdown + per-project `project_memories`).
+  This is what the provider already remembers/inferred — surface it as a "what
+  the provider already knows about you" panel, distinct from our transcript-derived
+  dossier.
+
+You can also upload a bare `conversations.json` (no `account`/`memory` returned).
+`projects/` and `design_chats/` are ignored.
 
 ## SSE format (`/analyze`)
 

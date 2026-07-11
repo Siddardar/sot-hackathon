@@ -18,9 +18,50 @@ We also accept a single conversation object (not wrapped in a list).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
-from schemas import Conversation, Message
+from schemas import Account, Conversation, Message, ProjectMemory, ProviderMemory
+
+
+def parse_users(data: Any) -> Optional[Account]:
+    """Extract the account identity from a Claude ``users.json`` payload.
+
+    ``users.json`` is a list with a single user object:
+        [{"full_name", "email_address", "verified_phone_number", ...}]
+    """
+    user = data[0] if isinstance(data, list) and data else data
+    if not isinstance(user, dict):
+        return None
+    name = user.get("full_name")
+    email = user.get("email_address")
+    phone = user.get("verified_phone_number")
+    if not any((name, email, phone)):
+        return None
+    return Account(name=name, email=email, phone=phone)
+
+
+def parse_memories(data: Any) -> Optional[ProviderMemory]:
+    """Extract the provider's own inferred profile from ``memories.json``.
+
+    ``memories.json`` is a list with a single object:
+        [{"account_uuid", "conversations_memory": "<markdown>",
+          "project_memories": {"<project_uuid>": "<markdown>", ...}}]
+    """
+    item = data[0] if isinstance(data, list) and data else data
+    if not isinstance(item, dict):
+        return None
+
+    conv_mem = item.get("conversations_memory")
+    conv_mem = conv_mem.strip() if isinstance(conv_mem, str) and conv_mem.strip() else None
+
+    project_memories: list[ProjectMemory] = []
+    for project_id, text in (item.get("project_memories") or {}).items():
+        if isinstance(text, str) and text.strip():
+            project_memories.append(ProjectMemory(project_id=str(project_id), memory=text.strip()))
+
+    if not conv_mem and not project_memories:
+        return None
+    return ProviderMemory(conversations_memory=conv_mem, project_memories=project_memories)
 
 
 def looks_like_claude(data: Any) -> bool:

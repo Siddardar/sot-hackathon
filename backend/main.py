@@ -12,17 +12,25 @@ The app is stateless: transcripts live only for the lifetime of a request.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import time
-from typing import Iterator, Optional
+import zipfile
+from typing import Any, Iterator, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import profiler
-from normalizers import UnsupportedFormatError, normalize
+from normalizers import (
+    UnsupportedFormatError,
+    normalize,
+    parse_memories,
+    parse_users,
+    to_user_only,
+)
 from schemas import (
     AnalyzeRequest,
     ConversationSummary,
@@ -53,6 +61,64 @@ def _preview(text: str) -> str:
     return text if len(text) <= _PREVIEW_CHARS else text[: _PREVIEW_CHARS - 1].rstrip() + "…"
 
 
+def _find_zip_member(zf: zipfile.ZipFile, basename: str) -> Optional[str]:
+    """Return the shallowest archive member whose filename is ``basename``.
+
+    Claude exports may be zipped with a top-level folder prefix and also contain
+    per-project/design conversation files in subfolders — we want the top-level
+    ``conversations.json`` / ``users.json``, i.e. the one nearest the root.
+    """
+    candidates = [
+        name for name in zf.namelist()
+        if not name.endswith("/") and name.rsplit("/", 1)[-1] == basename
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda name: name.count("/"))
+
+
+def _read_optional_member(zf: zipfile.ZipFile, basename: str) -> Optional[Any]:
+    """Read and JSON-parse an optional top-level member; return None if absent/malformed."""
+    member = _find_zip_member(zf, basename)
+    if member is None:
+        return None
+    try:
+        return json.loads(zf.read(member))
+    except json.JSONDecodeError:
+        return None
+
+
+def _load_export(raw: bytes) -> tuple[Any, Optional[Any], Optional[Any]]:
+    """Return ``(conversations_data, users_data, memories_data)`` from an upload.
+
+    Accepts either the full account export as a ``.zip`` (we pull the top-level
+    ``conversations.json``, ``users.json``, and ``memories.json`` out of it) or a
+    single ``conversations.json`` file (in which case users/memories are None).
+    """
+    bio = io.BytesIO(raw)
+    if zipfile.is_zipfile(bio):
+        with zipfile.ZipFile(bio) as zf:
+            conv_member = _find_zip_member(zf, "conversations.json")
+            if conv_member is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No conversations.json found in the uploaded archive.",
+                )
+            try:
+                conversations_data = json.loads(zf.read(conv_member))
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail=f"conversations.json is not valid JSON: {exc}") from exc
+
+            users_data = _read_optional_member(zf, "users.json")
+            memories_data = _read_optional_member(zf, "memories.json")
+            return conversations_data, users_data, memories_data
+
+    try:
+        return json.loads(raw), None, None
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"File is not valid JSON: {exc}") from exc
+
+
 # --------------------------------------------------------------------------- #
 # /parse
 # --------------------------------------------------------------------------- #
@@ -60,25 +126,33 @@ def _preview(text: str) -> str:
 async def parse(
     file: UploadFile = File(...),
     format: str = Form("auto"),
+    human_only: bool = Form(True),
 ) -> ParseResponse:
     """Parse an uploaded export into canonical conversations.
 
-    Body: multipart with ``file`` (the JSON export) and optional ``format``
-    (``auto`` | ``claude`` | ``chatgpt`` | ``generic``).
+    Body: multipart with ``file`` (a ``.zip`` account export or a single
+    ``conversations.json``), optional ``format`` (``auto`` | ``claude`` |
+    ``chatgpt`` | ``generic``), and optional ``human_only`` (default ``true`` —
+    keep only the user's messages).
     """
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="The uploaded file is empty.")
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"File is not valid JSON: {exc}") from exc
+    conversations_data, users_data, memories_data = _load_export(raw)
 
     try:
-        used_format, conversations = normalize(data, format)
+        used_format, conversations = normalize(conversations_data, format)
     except UnsupportedFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if human_only:
+        conversations = to_user_only(conversations)
+        if not conversations:
+            raise HTTPException(status_code=422, detail="No human messages found to analyze.")
+
+    account = parse_users(users_data) if users_data is not None else None
+    memory = parse_memories(memories_data) if memories_data is not None else None
 
     summaries = [
         ConversationSummary(
@@ -90,7 +164,13 @@ async def parse(
         for conv in conversations
     ]
 
-    return ParseResponse(format=used_format, conversations=conversations, summaries=summaries)
+    return ParseResponse(
+        format=used_format,
+        conversations=conversations,
+        summaries=summaries,
+        account=account,
+        memory=memory,
+    )
 
 
 # --------------------------------------------------------------------------- #

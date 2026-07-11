@@ -25,7 +25,7 @@ export default function Home() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-2xl font-semibold text-slate-900">
-            Sensitive Information Check
+            Glassdoor
           </h1>
           <p className="mt-2 text-sm text-slate-500">
             Upload a JSON file to scan for sensitive information
