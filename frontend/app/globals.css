@@ -35,6 +35,10 @@ body {
   color: var(--ink);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 /*
  * Glasshouse motif: a faint greenhouse glazing grid with a soft diagonal
  * light sheen, layered behind all content. Kept low-contrast so it reads as

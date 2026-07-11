@@ -1,3 +1,5 @@
+import { ExportGuide } from "./ExportGuide";
+
 const STEPS = [
   {
     number: "1",
@@ -19,7 +21,7 @@ const STEPS = [
 
 export function HowItWorks() {
   return (
-    <section className="px-6 pb-[100px] pt-5 sm:px-14">
+    <section id="how-it-works" className="scroll-mt-8 px-6 pb-[100px] pt-5 sm:px-14">
       <h2 className="mb-6 text-[13px] font-semibold uppercase tracking-[0.04em] text-accent">
         How it works
       </h2>
@@ -40,6 +42,8 @@ export function HowItWorks() {
           </div>
         ))}
       </div>
+
+      <ExportGuide />
     </section>
   );
 }

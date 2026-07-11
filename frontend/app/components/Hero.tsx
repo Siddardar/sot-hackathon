@@ -12,7 +12,7 @@ export function Hero() {
         </h1>
 
         <p className="mb-10 max-w-[520px] text-[19px] leading-[1.6] text-secondary">
-          An LLM can guess your income, your health, who you love — from a few
+          An LLM can guess your income, your health, who you love; from a few
           sentences you thought were casual. Glasshouse makes those guesses
           visible,
           so you stay in control of what you give away.
@@ -20,9 +20,7 @@ export function Hero() {
 
         <div className="flex flex-wrap items-center gap-4">
           <UploadButton />
-          <span className="text-[13px] text-faint">
-            Runs privately in your browser
-          </span>
+          
         </div>
       </div>
 

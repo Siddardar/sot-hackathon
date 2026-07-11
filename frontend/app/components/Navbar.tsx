@@ -1,4 +1,8 @@
-const NAV_LINKS = ["How it works", "Privacy", "FAQ"];
+const NAV_LINKS = [
+  { label: "How it works", href: "#how-it-works" },
+  { label: "Export chats", href: "#export-guide" },
+  { label: "FAQ", href: "#faq" },
+];
 
 export function Navbar() {
   return (
@@ -10,11 +14,11 @@ export function Navbar() {
       <div className="hidden items-center gap-8 text-[14px] font-medium text-muted md:flex">
         {NAV_LINKS.map((link) => (
           <a
-            key={link}
-            href="#"
+            key={link.href}
+            href={link.href}
             className="transition-opacity hover:opacity-60"
           >
-            {link}
+            {link.label}
           </a>
         ))}
       </div>
