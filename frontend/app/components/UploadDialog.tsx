@@ -6,6 +6,7 @@ import { analyze, parseExport, type AnalysisMode, type ExportFiles } from "../li
 import { newReportId, saveReport } from "../lib/reportStore";
 
 const ACCEPTED_FILE_TYPES = ".json,application/json,.zip,application/zip,application/x-zip-compressed";
+const PENDING_REPORT_KEY = "glasshouse:pending-report-id";
 
 interface UploadDialogProps {
   onClose: () => void;
@@ -51,6 +52,7 @@ function isAcceptedFile(file: File): boolean {
 export function UploadDialog({ onClose }: UploadDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const pendingReportWindowRef = useRef<Window | null>(null);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("conservative");
   const [selectedParts, setSelectedParts] = useState<ExportFiles | null>(null);
   const [selectionLabel, setSelectionLabel] = useState<string | null>(null);
@@ -79,12 +81,15 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
     if (!isAcceptedFile(file)) {
       setSelectedParts(null);
       setSelectionLabel(null);
+      setReportId(null);
+      setStatus(null);
       setError("Choose a .json or .zip export.");
       return;
     }
     setSelectedParts({ file });
     setSelectionLabel(file.name);
     setError(null);
+    setStatus(null);
     setReportId(null);
   };
 
@@ -93,6 +98,8 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
     if (!conversationsFile) {
       setSelectedParts(null);
       setSelectionLabel(null);
+      setReportId(null);
+      setStatus(null);
       setError("No conversations.json found in the selected folder.");
       return;
     }
@@ -106,7 +113,16 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
     });
     setSelectionLabel(`${folderName} (${files.length} files)`);
     setError(null);
+    setStatus(null);
     setReportId(null);
+  };
+
+  const selectMode = (mode: AnalysisMode) => {
+    if (mode === analysisMode) return;
+    setAnalysisMode(mode);
+    setReportId(null);
+    setStatus(null);
+    setError(null);
   };
 
   const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,6 +160,8 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
     setError(null);
     setReportId(null);
     setIsRunning(true);
+    localStorage.removeItem(PENDING_REPORT_KEY);
+    pendingReportWindowRef.current = window.open("/generating-report", "_blank");
     try {
       setStatus("Uploading and parsing...");
       const parsed = await parseExport(selectedParts);
@@ -192,9 +210,20 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
           ? `Done - ${inferences.length} findings.`
           : `Done - ${inferences.length} findings (couldn't save locally; use the link below now).`,
       );
-      window.open(`/${id}`, "_blank", "noopener");
+      const reportUrl = `/${id}`;
+      localStorage.setItem(PENDING_REPORT_KEY, id);
+      if (pendingReportWindowRef.current && !pendingReportWindowRef.current.closed) {
+        pendingReportWindowRef.current.location.href = reportUrl;
+      } else {
+        window.open(reportUrl, "_blank");
+      }
+      pendingReportWindowRef.current = null;
     } catch (err) {
       console.error("[Glasshouse] pipeline error:", err);
+      if (pendingReportWindowRef.current && !pendingReportWindowRef.current.closed) {
+        pendingReportWindowRef.current.close();
+      }
+      pendingReportWindowRef.current = null;
       setStatus(null);
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -302,7 +331,7 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
                 key={option.value}
                 type="button"
                 disabled={isRunning}
-                onClick={() => setAnalysisMode(option.value)}
+                onClick={() => selectMode(option.value)}
                 className={`flex w-full items-center gap-4 rounded-[14px] border-2 bg-surface px-5 py-4 text-left transition-colors ${
                   active ? "border-accent bg-[#fff3eb]" : "border-hairline hover:border-[#d8c8b4]"
                 } ${isRunning ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
@@ -332,25 +361,23 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
           </p>
         )}
 
-        {reportId && !error && (
+        {reportId && !error ? (
           <a
             href={`/${reportId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-2 inline-block text-[13px] font-semibold text-accent underline underline-offset-2"
+            className="mt-5 block w-full rounded-full bg-accent px-8 py-4 text-center text-[16px] font-bold text-accent-foreground transition-opacity hover:opacity-90 cursor-pointer"
           >
-            Open report
+            Show report
           </a>
+        ) : (
+          <button
+            type="button"
+            disabled={isRunning}
+            onClick={() => void runPipeline()}
+            className="mt-5 w-full rounded-full bg-accent px-8 py-4 text-[16px] font-bold text-accent-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+          >
+            {isRunning ? "Generating report..." : "Generate report"}
+          </button>
         )}
-
-        <button
-          type="button"
-          disabled={isRunning}
-          onClick={() => void runPipeline()}
-          className="mt-5 w-full rounded-full bg-accent px-8 py-4 text-[16px] font-bold text-accent-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
-        >
-          {isRunning ? "Generating report..." : "Generate report"}
-        </button>
       </div>
     </div>
   );
