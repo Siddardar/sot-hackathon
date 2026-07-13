@@ -13,6 +13,7 @@ The app is stateless: transcripts live only for the lifetime of a request.
 
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import json
 import os
@@ -206,20 +207,35 @@ def _sse(event: str, data: dict) -> str:
 def _analyze_stream(request: AnalyzeRequest) -> Iterator[str]:
     """Yield SSE events: one ``inference`` per finding, then ``done``.
 
-    Runs the (blocking) profiler once; findings are emitted one at a time so the
-    UI can stagger them in. This is a sync generator so FastAPI runs it in a
-    worker thread and the blocking Gemini call doesn't stall the event loop.
+    The profiler's Gemini call is blocking and can take ~20s, during which the
+    stream would otherwise send no bytes at all. Proxies and tunnels (e.g. ngrok
+    in front of the Next dev server) treat that silence as an idle/first-byte
+    timeout and drop the connection — which is why /analyze works on localhost
+    but not through ngrok. So we flush a byte immediately and emit keep-alive
+    comments every few seconds while the profiler runs in a worker thread. SSE
+    comment lines (":" prefix) carry no event/data and are ignored by the
+    client parser.
     """
-    try:
-        result = profiler.run_profiler(request.messages, mode=request.mode)
-    except profiler.ProfilerError as exc:
-        yield _sse("error", {"message": str(exc)})
-        yield _sse("done", {"count": 0})
-        return
-    except Exception as exc:  # noqa: BLE001 — surface any failure to the client cleanly
-        yield _sse("error", {"message": f"Unexpected profiler error: {exc}"})
-        yield _sse("done", {"count": 0})
-        return
+    # First byte before any blocking work — flushes the response headers so
+    # every hop knows the stream is alive.
+    yield ": connected\n\n"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(profiler.run_profiler, request.messages, mode=request.mode)
+        while True:
+            try:
+                result = future.result(timeout=5)
+                break
+            except concurrent.futures.TimeoutError:
+                yield ": keep-alive\n\n"  # heartbeat during the long Gemini call
+            except profiler.ProfilerError as exc:
+                yield _sse("error", {"message": str(exc)})
+                yield _sse("done", {"count": 0})
+                return
+            except Exception as exc:  # noqa: BLE001 — surface any failure to the client cleanly
+                yield _sse("error", {"message": f"Unexpected profiler error: {exc}"})
+                yield _sse("done", {"count": 0})
+                return
 
     yield _sse(
         "meta",

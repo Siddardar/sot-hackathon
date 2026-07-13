@@ -45,11 +45,11 @@ const EXPORT_GUIDES: Record<Provider, ExportGuideContent> = {
 const PROVIDERS: Provider[] = ["chatgpt", "claude"];
 
 export function ExportGuide() {
-  const [provider, setProvider] = useState<Provider>("chatgpt");
+  const [provider, setProvider] = useState<Provider>("claude");
   const guide = EXPORT_GUIDES[provider];
 
   return (
-    <div id="export-guide" className="mt-14 scroll-mt-8 border-t border-hairline pt-12">
+    <div id="export-guide" className="mt-14 scroll-mt-8">
       <div className="mb-8 flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="mb-3 text-[12px] font-bold uppercase tracking-[0.12em] text-accent">
@@ -60,7 +60,7 @@ export function ExportGuide() {
           </h3>
         </div>
 
-        <div className="inline-flex w-fit rounded-full bg-[#f1e9df] p-1">
+        <div className="relative z-10 inline-flex w-fit rounded-full bg-[#f1e9df] p-1">
           {PROVIDERS.map((item) => {
             const active = provider === item;
             return (
@@ -68,7 +68,7 @@ export function ExportGuide() {
                 key={item}
                 type="button"
                 onClick={() => setProvider(item)}
-                className={`rounded-full px-5 py-2.5 text-[14px] font-bold transition-colors sm:px-7 ${
+                className={`touch-manipulation rounded-full px-5 py-2.5 text-[14px] font-bold transition-colors cursor-pointer sm:px-7 ${
                   active
                     ? "bg-accent text-accent-foreground shadow-sm"
                     : "text-muted hover:text-ink"
@@ -105,7 +105,7 @@ export function ExportGuide() {
             src={guide.screenshot}
             alt={`Screenshot: ${guide.screenshotLabel}`}
             fill
-            className="object-cover object-top"
+            className="pointer-events-none object-cover object-top"
             sizes="(min-width: 1024px) 52vw, 100vw"
             priority={false}
           />

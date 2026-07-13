@@ -1,8 +1,14 @@
 // Client for the Memory Leak / Glasshouse backend.
-// Override the backend URL with NEXT_PUBLIC_API_BASE (defaults to localhost:8000).
-
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+//
+// Defaults to the same-origin "/backend" path, which next.config.ts rewrites to
+// the real backend (localhost:8000 by default). A same-origin relative path
+// means the browser talks only to whatever origin served the app — localhost or
+// an ngrok tunnel — and the Next server proxies to the backend, so it works over
+// ngrok with a single tunnel and no CORS.
+//
+// Set NEXT_PUBLIC_API_BASE to hit a backend directly instead (must be an
+// absolute URL the browser can reach, and CORS-enabled).
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/backend";
 
 export type Role = "user" | "assistant";
 export type Tier = "A" | "B" | "C" | "D";

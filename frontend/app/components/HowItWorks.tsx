@@ -4,7 +4,7 @@ const STEPS = [
   {
     number: "1",
     title: "Upload your chat",
-    description: "A file export or pasted transcript — whatever you have.",
+    description: "A file export or an exported conversation in a json format.",
   },
   {
     number: "2",
