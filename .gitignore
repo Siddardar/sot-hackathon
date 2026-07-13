@@ -1,0 +1,5 @@
+.DS_Store
+
+# Local notes/plans in the repository root.
+/*.md
+!/README.md
