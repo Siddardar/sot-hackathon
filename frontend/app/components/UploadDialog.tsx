@@ -1,5 +1,6 @@
 "use client";
 
+import { unzip, type Unzipped } from "fflate";
 import { useEffect, useRef, useState } from "react";
 
 import { analyze, parseExport, type AnalysisMode, type ExportFiles } from "../lib/api";
@@ -49,6 +50,71 @@ function isAcceptedFile(file: File): boolean {
   return name.endsWith(".json") || name.endsWith(".zip");
 }
 
+// The only files we need from an export. Large ChatGPT exports split conversations
+// across conversations-000.json, -001.json, … and ship image attachments as .dat
+// blobs — we keep just the JSON so those attachments never leave the browser.
+const CONV_PART_RE = /^conversations(-\d+)?\.json$/i;
+const baseName = (path: string) => path.split("/").pop() || path;
+
+function isWantedExportEntry(name: string): boolean {
+  if (name.endsWith("/")) return false;
+  const b = baseName(name);
+  return CONV_PART_RE.test(b) || b === "users.json" || b === "user.json" || b === "memories.json";
+}
+
+/**
+ * Unzip a .zip export in-browser and return only the JSON parts we send to the
+ * backend. fflate's `filter` skips decompressing everything else (the .dat image
+ * attachments, chat.html, etc.), so a multi-hundred-MB export becomes a few MB of
+ * JSON before it ever hits the network.
+ */
+async function extractExportFromZip(zip: File): Promise<ExportFiles> {
+  const buf = new Uint8Array(await zip.arrayBuffer());
+  const entries = await new Promise<Unzipped>((resolve, reject) => {
+    unzip(buf, { filter: (f) => isWantedExportEntry(f.name) }, (err, data) =>
+      err ? reject(err) : resolve(data),
+    );
+  });
+
+  const names = Object.keys(entries);
+  const convNames = names.filter((n) => CONV_PART_RE.test(baseName(n)));
+  if (convNames.length === 0) {
+    throw new Error("No conversations.json found in the archive.");
+  }
+
+  // Keep the shallowest-depth parts (skip per-project conversations nested in
+  // Claude subfolders), merged in filename order into one conversations.json.
+  const minDepth = Math.min(...convNames.map((n) => n.split("/").length));
+  const parts = convNames
+    .filter((n) => n.split("/").length === minDepth)
+    .sort((a, b) => baseName(a).localeCompare(baseName(b)));
+
+  const decoder = new TextDecoder();
+  const merged: unknown[] = [];
+  for (const name of parts) {
+    const data = JSON.parse(decoder.decode(entries[name]));
+    if (Array.isArray(data)) merged.push(...data);
+    else merged.push(data);
+  }
+  const conversationsFile = new File([JSON.stringify(merged)], "conversations.json", {
+    type: "application/json",
+  });
+
+  const pick = (wanted: string): File | undefined => {
+    const hit = names
+      .filter((n) => baseName(n) === wanted)
+      .sort((a, b) => a.split("/").length - b.split("/").length)[0];
+    return hit ? new File([entries[hit]], wanted, { type: "application/json" }) : undefined;
+  };
+
+  return {
+    file: conversationsFile,
+    // ChatGPT uses user.json (singular); Claude uses users.json.
+    users: pick("users.json") ?? pick("user.json"),
+    memories: pick("memories.json"),
+  };
+}
+
 export function UploadDialog({ onClose }: UploadDialogProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -77,7 +143,7 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isRunning, onClose]);
 
-  const selectFile = (file: File) => {
+  const selectFile = async (file: File) => {
     if (!isAcceptedFile(file)) {
       setSelectedParts(null);
       setSelectionLabel(null);
@@ -86,6 +152,25 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
       setError("Choose a .json or .zip export.");
       return;
     }
+
+    if (file.name.toLowerCase().endsWith(".zip")) {
+      setError(null);
+      setReportId(null);
+      setStatus("Reading export (stripping attachments)...");
+      try {
+        const parts = await extractExportFromZip(file);
+        setSelectedParts(parts);
+        setSelectionLabel(file.name);
+        setStatus(null);
+      } catch (err) {
+        setSelectedParts(null);
+        setSelectionLabel(null);
+        setStatus(null);
+        setError(err instanceof Error ? err.message : "Couldn't read the .zip export.");
+      }
+      return;
+    }
+
     setSelectedParts({ file });
     setSelectionLabel(file.name);
     setError(null);
@@ -127,7 +212,7 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
 
   const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
-    if (selectedFile) selectFile(selectedFile);
+    if (selectedFile) void selectFile(selectedFile);
     event.target.value = "";
   };
 
@@ -148,7 +233,7 @@ export function UploadDialog({ onClose }: UploadDialogProps) {
       selectFolderFiles(droppedFiles);
       return;
     }
-    selectFile(droppedFiles[0]);
+    void selectFile(droppedFiles[0]);
   };
 
   const runPipeline = async () => {

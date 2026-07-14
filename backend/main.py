@@ -17,6 +17,7 @@ import concurrent.futures
 import io
 import json
 import os
+import re
 import time
 import zipfile
 from typing import Any, Iterator, Optional
@@ -79,6 +80,39 @@ def _find_zip_member(zf: zipfile.ZipFile, basename: str) -> Optional[str]:
     return min(candidates, key=lambda name: name.count("/"))
 
 
+# Large ChatGPT exports split their conversations across
+# ``conversations-000.json``, ``conversations-001.json``, … next to (or instead
+# of) a single ``conversations.json``. Match both shapes.
+_CONV_PART_RE = re.compile(r"^conversations(-\d+)?\.json$", re.IGNORECASE)
+
+
+def _find_conversation_members(zf: zipfile.ZipFile) -> list[str]:
+    """Return the top-level ``conversations*.json`` members, sorted by name.
+
+    Restricts to the shallowest depth so per-project conversation files nested
+    in Claude subfolders don't get mixed in with the account-level export.
+    """
+    matches = [
+        name for name in zf.namelist()
+        if not name.endswith("/") and _CONV_PART_RE.match(name.rsplit("/", 1)[-1])
+    ]
+    if not matches:
+        return []
+    min_depth = min(name.count("/") for name in matches)
+    return sorted(name for name in matches if name.count("/") == min_depth)
+
+
+def _merge_conversation_parts(parts: list[Any]) -> list[Any]:
+    """Concatenate the conversation arrays from one or more export parts."""
+    merged: list[Any] = []
+    for data in parts:
+        if isinstance(data, list):
+            merged.extend(data)
+        else:
+            merged.append(data)
+    return merged
+
+
 def _read_optional_member(zf: zipfile.ZipFile, basename: str) -> Optional[Any]:
     """Read and JSON-parse an optional top-level member; return None if absent/malformed."""
     member = _find_zip_member(zf, basename)
@@ -100,18 +134,23 @@ def _load_export(raw: bytes) -> tuple[Any, Optional[Any], Optional[Any]]:
     bio = io.BytesIO(raw)
     if zipfile.is_zipfile(bio):
         with zipfile.ZipFile(bio) as zf:
-            conv_member = _find_zip_member(zf, "conversations.json")
-            if conv_member is None:
+            conv_members = _find_conversation_members(zf)
+            if not conv_members:
                 raise HTTPException(
                     status_code=422,
                     detail="No conversations.json found in the uploaded archive.",
                 )
-            try:
-                conversations_data = json.loads(zf.read(conv_member))
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=400, detail=f"conversations.json is not valid JSON: {exc}") from exc
+            parts: list[Any] = []
+            for member in conv_members:
+                try:
+                    parts.append(json.loads(zf.read(member)))
+                except json.JSONDecodeError as exc:
+                    name = member.rsplit("/", 1)[-1]
+                    raise HTTPException(status_code=400, detail=f"{name} is not valid JSON: {exc}") from exc
+            conversations_data = _merge_conversation_parts(parts)
 
-            users_data = _read_optional_member(zf, "users.json")
+            # ChatGPT names its account file user.json (singular); Claude uses users.json.
+            users_data = _read_optional_member(zf, "users.json") or _read_optional_member(zf, "user.json")
             memories_data = _read_optional_member(zf, "memories.json")
             return conversations_data, users_data, memories_data
 

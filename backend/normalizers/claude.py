@@ -24,17 +24,20 @@ from schemas import Account, Conversation, Message, ProjectMemory, ProviderMemor
 
 
 def parse_users(data: Any) -> Optional[Account]:
-    """Extract the account identity from a Claude ``users.json`` payload.
+    """Extract the account identity from an account-info payload.
 
-    ``users.json`` is a list with a single user object:
-        [{"full_name", "email_address", "verified_phone_number", ...}]
+    Handles both providers' shapes:
+      * Claude ``users.json`` — a list with a single object
+        ``[{"full_name", "email_address", "verified_phone_number", ...}]``
+      * ChatGPT ``user.json`` — a single object
+        ``{"email", "birth_year", "id", "chatgpt_plus_user"}``
     """
     user = data[0] if isinstance(data, list) and data else data
     if not isinstance(user, dict):
         return None
-    name = user.get("full_name")
-    email = user.get("email_address")
-    phone = user.get("verified_phone_number")
+    name = user.get("full_name") or user.get("name")
+    email = user.get("email_address") or user.get("email")
+    phone = user.get("verified_phone_number") or user.get("phone_number")
     if not any((name, email, phone)):
         return None
     return Account(name=name, email=email, phone=phone)
